@@ -23,6 +23,7 @@ type Container struct {
 	Image string `json:"image"`
 	// +listType=map
 	// +listMapKey=containerPort
+	// +listMapKey=protocol
 	Ports     []ContainerPort             `json:"ports,omitempty"`
 	Env       []corev1.EnvVar             `json:"env,omitempty"`
 	EnvFrom   []corev1.EnvFromSource      `json:"envFrom,omitempty"`
@@ -99,7 +100,7 @@ type WebAppStatus struct {
 	IngressURL      string `json:"ingressURL,omitempty"`
 	// +listType=map
 	// +listMapKey=type
-	Conditions []metav1.Condition `json:"conditions,omitempty" patchStrategy:"merge" patchMergeKey:"type"`
+	Conditions []metav1.Condition `json:"conditions,omitempty"`
 }
 
 // +kubebuilder:object:root=true

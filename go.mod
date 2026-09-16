@@ -1,4 +1,4 @@
-module webapp-operator
+module github.com/blue-samarth/Warp-CRD
 
 go 1.26.2
 

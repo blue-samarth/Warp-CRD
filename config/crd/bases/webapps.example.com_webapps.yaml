@@ -1239,6 +1239,7 @@ spec:
                       type: array
                       x-kubernetes-list-map-keys:
                       - containerPort
+                      - protocol
                       x-kubernetes-list-type: map
                     resources:
                       description: ResourceRequirements describes the compute resource
