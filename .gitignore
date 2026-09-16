@@ -1,0 +1,6 @@
+bin/
+dist/
+cover.out
+cover.raw.out
+*.test
+zz_generated.deepcopy.go

@@ -1,0 +1,3 @@
+resources:
+  - bases/webapps.example.com_webapps.yaml
+  - bases/webapps.example.com_webapppolicies.yaml

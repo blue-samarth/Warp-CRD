@@ -1,0 +1,9 @@
+bin/
+dist/
+.git/
+cover.out
+cover.raw.out
+test/
+docs/
+config/
+*.md
