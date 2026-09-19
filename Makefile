@@ -46,7 +46,7 @@ generate: controller-gen ## Generate DeepCopy methods
 
 .PHONY: manifests
 manifests: controller-gen ## Generate CRD, RBAC and webhook manifests
-	$(CONTROLLER_GEN) crd:maxDescLen=0 rbac:roleName=manager-role webhook \
+	$(CONTROLLER_GEN) crd rbac:roleName=manager-role webhook \
 		paths="./api/..." paths="./internal/..." \
 		output:crd:artifacts:config=config/crd/bases
 
@@ -93,7 +93,7 @@ docker-build:
 
 .PHONY: install
 install: manifests kustomize ## Install CRDs into the current cluster
-	$(KUSTOMIZE) build config/crd | kubectl apply --server-side --force-conflicts -f -
+	$(KUSTOMIZE) build config/crd | kubectl apply --server-side -f -
 
 .PHONY: uninstall
 uninstall: kustomize
@@ -102,7 +102,7 @@ uninstall: kustomize
 .PHONY: deploy
 deploy: manifests kustomize ## Deploy the operator to the current cluster
 	cd config/manager && $(KUSTOMIZE) edit set image controller=$(IMG)
-	$(KUSTOMIZE) build config/default | kubectl apply --server-side --force-conflicts -f -
+	$(KUSTOMIZE) build config/default | kubectl apply --server-side -f -
 
 .PHONY: undeploy
 undeploy: kustomize

@@ -4,6 +4,7 @@ import (
 	appsv1 "k8s.io/api/apps/v1"
 	autoscalingv2 "k8s.io/api/autoscaling/v2"
 	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
@@ -37,6 +38,32 @@ type Container struct {
 	ReadinessProbe  *corev1.Probe               `json:"readinessProbe,omitempty"`
 	StartupProbe    *corev1.Probe               `json:"startupProbe,omitempty"`
 	SecurityContext *ContainerSecurityContext   `json:"securityContext,omitempty"`
+	// +kubebuilder:validation:MaxItems=8
+	// +listType=map
+	// +listMapKey=name
+	ScratchVolumes []ScratchVolume `json:"scratchVolumes,omitempty"`
+}
+
+// +kubebuilder:validation:Enum=Disk;Memory
+type ScratchMedium string
+
+const (
+	ScratchMediumDisk   ScratchMedium = "Disk"
+	ScratchMediumMemory ScratchMedium = "Memory"
+)
+
+type ScratchVolume struct {
+	// +kubebuilder:validation:MinLength=1
+	// +kubebuilder:validation:MaxLength=63
+	// +kubebuilder:validation:Pattern=`^[a-z0-9]([-a-z0-9]*[a-z0-9])?$`
+	Name string `json:"name"`
+	// +kubebuilder:validation:MinLength=1
+	// +kubebuilder:validation:MaxLength=4096
+	// +kubebuilder:validation:Pattern=`^/`
+	MountPath string `json:"mountPath"`
+	// +kubebuilder:default=Disk
+	Medium    ScratchMedium      `json:"medium,omitempty"`
+	SizeLimit *resource.Quantity `json:"sizeLimit,omitempty"`
 }
 
 type ContainerSecurityContext struct {
@@ -123,8 +150,12 @@ type WebAppSpec struct {
 	// +kubebuilder:validation:Pattern=`^[a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*$`
 	ServiceAccountName string              `json:"serviceAccountName,omitempty"`
 	SecurityContext    *PodSecurityContext `json:"securityContext,omitempty"`
-	PodLabels          map[string]string   `json:"podLabels,omitempty"`
-	PodAnnotations     map[string]string   `json:"podAnnotations,omitempty"`
+	// +kubebuilder:validation:MaxProperties=32
+	// +kubebuilder:validation:XValidation:rule="self.all(k, !(k in ['app.kubernetes.io/name','app.kubernetes.io/instance','app.kubernetes.io/managed-by']) && !k.contains('webapps.example.com/'))",message="app.kubernetes.io/name, /instance, /managed-by and webapps.example.com/ are reserved by the operator"
+	PodLabels map[string]string `json:"podLabels,omitempty"`
+	// +kubebuilder:validation:MaxProperties=32
+	// +kubebuilder:validation:XValidation:rule="self.all(k, !k.contains('webapps.example.com/'))",message="webapps.example.com/ is reserved by the operator"
+	PodAnnotations map[string]string `json:"podAnnotations,omitempty"`
 }
 
 type WebAppStatus struct {

@@ -25,6 +25,10 @@ type ResourcePolicy struct {
 type WebAppPolicySpec struct {
 	NamespaceSelector *metav1.LabelSelector `json:"namespaceSelector,omitempty"`
 	Resources         *ResourcePolicy       `json:"resources,omitempty"`
+	// +kubebuilder:validation:MaxItems=32
+	AllowedServiceAccounts []string `json:"allowedServiceAccounts,omitempty"`
+	// +kubebuilder:validation:MaxItems=32
+	ForbiddenPodAnnotationPrefixes []string `json:"forbiddenPodAnnotationPrefixes,omitempty"`
 	// +kubebuilder:validation:Minimum=1
 	MaxReplicas *int32 `json:"maxReplicas,omitempty"`
 	// +kubebuilder:validation:Enum=Enforce;Warn;Audit
