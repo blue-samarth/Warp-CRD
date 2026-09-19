@@ -151,8 +151,10 @@ type WebAppSpec struct {
 	Affinity         *corev1.Affinity              `json:"affinity,omitempty"`
 	// +kubebuilder:validation:MaxLength=253
 	// +kubebuilder:validation:Pattern=`^[a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*$`
-	ServiceAccountName string              `json:"serviceAccountName,omitempty"`
-	SecurityContext    *PodSecurityContext `json:"securityContext,omitempty"`
+	ServiceAccountName string `json:"serviceAccountName,omitempty"`
+	// +kubebuilder:default=false
+	AutomountServiceAccountToken *bool               `json:"automountServiceAccountToken,omitempty"`
+	SecurityContext              *PodSecurityContext `json:"securityContext,omitempty"`
 	// +kubebuilder:validation:MaxProperties=32
 	// +kubebuilder:validation:XValidation:rule="self.all(k, !(k in ['app.kubernetes.io/name','app.kubernetes.io/instance','app.kubernetes.io/managed-by','pod-template-hash']) && !k.startsWith('webapps.example.com/'))",message="app.kubernetes.io/name, /instance, /managed-by, pod-template-hash and webapps.example.com/ are reserved"
 	PodLabels map[string]string `json:"podLabels,omitempty"`
@@ -179,6 +181,7 @@ type WebAppStatus struct {
 }
 
 // +kubebuilder:object:root=true
+// +kubebuilder:validation:XValidation:rule="self.metadata.name.size() <= 63 && self.metadata.name.matches('^[a-z]([-a-z0-9]*[a-z0-9])?$')",message="name becomes a Service name and a label value: max 63 characters, must start with a letter, lowercase alphanumerics and hyphens only"
 // +kubebuilder:subresource:status
 // +kubebuilder:subresource:scale:specpath=.spec.replicas,statuspath=.status.replicas,selectorpath=.status.selector
 // +kubebuilder:resource:shortName=wa,categories=all

@@ -969,6 +969,9 @@ spec:
                         x-kubernetes-list-type: atomic
                     type: object
                 type: object
+              automountServiceAccountToken:
+                default: false
+                type: boolean
               autoscaling:
                 properties:
                   behavior:
@@ -2294,6 +2297,10 @@ spec:
                 type: integer
             type: object
         type: object
+        x-kubernetes-validations:
+        - message: 'name becomes a Service name and a label value: max 63 characters,
+            must start with a letter, lowercase alphanumerics and hyphens only'
+          rule: self.metadata.name.size() <= 63 && self.metadata.name.matches('^[a-z]([-a-z0-9]*[a-z0-9])?$')
     served: true
     storage: true
     subresources:
