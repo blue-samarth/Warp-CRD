@@ -26,15 +26,14 @@ const (
 
 func SelectorLabels(app *v1alpha1.WebApp) map[string]string {
 	return map[string]string{
-		NameLabel:     app.Name,
-		InstanceLabel: app.Name,
+		NameLabel:      app.Name,
+		InstanceLabel:  app.Name,
+		ManagedByLabel: ManagedByValue,
 	}
 }
 
 func Labels(app *v1alpha1.WebApp) map[string]string {
-	l := SelectorLabels(app)
-	l[ManagedByLabel] = ManagedByValue
-	return l
+	return SelectorLabels(app)
 }
 
 func portName(p v1alpha1.ContainerPort) string {

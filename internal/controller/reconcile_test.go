@@ -50,6 +50,20 @@ func testApp() *v1alpha1.WebApp {
 	}
 }
 
+func ownedMeta() metav1.ObjectMeta {
+	return metav1.ObjectMeta{
+		Name:      "app",
+		Namespace: "ns",
+		OwnerReferences: []metav1.OwnerReference{{
+			APIVersion: v1alpha1.GroupVersion.String(),
+			Kind:       "WebApp",
+			Name:       "app",
+			UID:        "uid",
+			Controller: new(true),
+		}},
+	}
+}
+
 func newReconciler(t *testing.T, funcs interceptor.Funcs, objs ...client.Object) *WebAppReconciler {
 	t.Helper()
 	s := testScheme(t)
@@ -130,10 +144,10 @@ func TestFinalize_DeletesOwnedResourcesAndDropsFinalizer(t *testing.T) {
 	app.Finalizers = []string{v1alpha1.Finalizer}
 
 	owned := []client.Object{
-		&appsv1.Deployment{ObjectMeta: metav1.ObjectMeta{Name: "app", Namespace: "ns"}},
-		&corev1.Service{ObjectMeta: metav1.ObjectMeta{Name: "app", Namespace: "ns"}},
-		&networkingv1.Ingress{ObjectMeta: metav1.ObjectMeta{Name: "app", Namespace: "ns"}},
-		&autoscalingv2.HorizontalPodAutoscaler{ObjectMeta: metav1.ObjectMeta{Name: "app", Namespace: "ns"}},
+		&appsv1.Deployment{ObjectMeta: ownedMeta()},
+		&corev1.Service{ObjectMeta: ownedMeta()},
+		&networkingv1.Ingress{ObjectMeta: ownedMeta()},
+		&autoscalingv2.HorizontalPodAutoscaler{ObjectMeta: ownedMeta()},
 	}
 	r := newReconciler(t, interceptor.Funcs{}, append([]client.Object{app}, owned...)...)
 
@@ -174,7 +188,7 @@ func TestFinalize_SurfacesDeleteErrors(t *testing.T) {
 		Delete: func(_ context.Context, _ client.WithWatch, _ client.Object, _ ...client.DeleteOption) error {
 			return errors.New("webhook denied delete")
 		},
-	}, app)
+	}, app, &appsv1.Deployment{ObjectMeta: ownedMeta()})
 
 	_, err := r.Reconcile(t.Context(), appKey)
 	if err == nil || !strings.Contains(err.Error(), "webhook denied delete") {
@@ -193,7 +207,7 @@ func TestFinalize_SurfacesDeleteErrors(t *testing.T) {
 func TestSyncHPA_RemovesHPAWhenAutoscalingDisabled(t *testing.T) {
 	app := testApp()
 	hpa := &autoscalingv2.HorizontalPodAutoscaler{
-		ObjectMeta: metav1.ObjectMeta{Name: "app", Namespace: "ns"},
+		ObjectMeta: ownedMeta(),
 	}
 	r := newReconciler(t, interceptor.Funcs{}, app, hpa)
 
@@ -236,7 +250,7 @@ func TestSyncIngress_SurfacesApplyError(t *testing.T) {
 
 func TestSyncIngress_RemovesIngressWhenDomainCleared(t *testing.T) {
 	app := testApp()
-	ing := &networkingv1.Ingress{ObjectMeta: metav1.ObjectMeta{Name: "app", Namespace: "ns"}}
+	ing := &networkingv1.Ingress{ObjectMeta: ownedMeta()}
 	r := newReconciler(t, interceptor.Funcs{}, app, ing)
 
 	if err := r.syncIngress(t.Context(), app); err != nil {
@@ -247,13 +261,76 @@ func TestSyncIngress_RemovesIngressWhenDomainCleared(t *testing.T) {
 	}
 }
 
+func foreignMeta() metav1.ObjectMeta {
+	return metav1.ObjectMeta{
+		Name:      "app",
+		Namespace: "ns",
+		OwnerReferences: []metav1.OwnerReference{{
+			APIVersion: "v1", Kind: "ConfigMap", Name: "someone-else", UID: "other-uid",
+			Controller: new(true),
+		}},
+	}
+}
+
+func TestDeleteOwned_LeavesForeignObjectAlone(t *testing.T) {
+	app := testApp()
+	r := newReconciler(t, interceptor.Funcs{}, app,
+		&networkingv1.Ingress{ObjectMeta: foreignMeta()})
+
+	if err := r.deleteOwned(t.Context(), app, &networkingv1.Ingress{}); err != nil {
+		t.Fatal(err)
+	}
+	if err := r.Get(t.Context(), appKey.NamespacedName, &networkingv1.Ingress{}); err != nil {
+		t.Fatalf("an ingress this WebApp does not control must survive, got %v", err)
+	}
+}
+
+func TestReconcile_DoesNotDeleteForeignIngressWhenDomainUnset(t *testing.T) {
+	r := newReconciler(t, interceptor.Funcs{}, testApp(),
+		&networkingv1.Ingress{ObjectMeta: foreignMeta()})
+
+	if _, err := r.Reconcile(t.Context(), appKey); err != nil {
+		t.Fatal(err)
+	}
+	if err := r.Get(t.Context(), appKey.NamespacedName, &networkingv1.Ingress{}); err != nil {
+		t.Fatalf("reconcile deleted an object it does not own: %v", err)
+	}
+}
+
+func TestFinalize_LeavesForeignObjectsAlone(t *testing.T) {
+	now := metav1.Now()
+	app := testApp()
+	app.DeletionTimestamp = &now
+	app.Finalizers = []string{v1alpha1.Finalizer}
+
+	r := newReconciler(t, interceptor.Funcs{}, app,
+		&corev1.Service{ObjectMeta: foreignMeta()})
+
+	if _, err := r.Reconcile(t.Context(), appKey); err != nil {
+		t.Fatal(err)
+	}
+	if err := r.Get(t.Context(), appKey.NamespacedName, &corev1.Service{}); err != nil {
+		t.Fatalf("deleting a WebApp must not delete a same-named foreign Service: %v", err)
+	}
+}
+
+func TestSync_RefusesToAdoptForeignDeployment(t *testing.T) {
+	r := newReconciler(t, interceptor.Funcs{}, testApp(),
+		&appsv1.Deployment{ObjectMeta: foreignMeta()})
+
+	_, err := r.Reconcile(t.Context(), appKey)
+	if err == nil || !strings.Contains(err.Error(), "not controlled by this WebApp") {
+		t.Fatalf("want adoption refused, got %v", err)
+	}
+}
+
 func TestDeleteOwned_SurfacesNonNotFoundErrors(t *testing.T) {
 	app := testApp()
 	r := newReconciler(t, interceptor.Funcs{
 		Delete: func(_ context.Context, _ client.WithWatch, _ client.Object, _ ...client.DeleteOption) error {
 			return errors.New("forbidden")
 		},
-	}, app)
+	}, app, &networkingv1.Ingress{ObjectMeta: ownedMeta()})
 
 	err := r.deleteOwned(t.Context(), app, &networkingv1.Ingress{})
 	if err == nil || !strings.Contains(err.Error(), "forbidden") {
@@ -333,7 +410,7 @@ func TestReconcile_EmitsReconciledEventOnSpecChange(t *testing.T) {
 func TestReconcile_EmitsScaledEventWhenReplicasChange(t *testing.T) {
 	app := testApp()
 	dep := &appsv1.Deployment{
-		ObjectMeta: metav1.ObjectMeta{Name: "app", Namespace: "ns"},
+		ObjectMeta: ownedMeta(),
 		Status:     appsv1.DeploymentStatus{Replicas: 4},
 	}
 	r := newReconciler(t, interceptor.Funcs{}, app, dep)

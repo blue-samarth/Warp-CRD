@@ -1,7 +1,10 @@
 package resources
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"maps"
+	"strings"
 
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
@@ -38,14 +41,15 @@ func Deployment(app *v1alpha1.WebApp) *appsv1.Deployment {
 					Annotations: app.Spec.PodAnnotations,
 				},
 				Spec: corev1.PodSpec{
-					Containers:         containers(app),
-					ImagePullSecrets:   app.Spec.ImagePullSecrets,
-					NodeSelector:       app.Spec.NodeSelector,
-					Tolerations:        app.Spec.Tolerations,
-					Affinity:           app.Spec.Affinity,
-					ServiceAccountName: app.Spec.ServiceAccountName,
-					SecurityContext:    podSecurityContext(app),
-					Volumes:            scratchVolumes(app),
+					Containers:                   containers(app),
+					ImagePullSecrets:             app.Spec.ImagePullSecrets,
+					NodeSelector:                 app.Spec.NodeSelector,
+					Tolerations:                  app.Spec.Tolerations,
+					Affinity:                     app.Spec.Affinity,
+					ServiceAccountName:           app.Spec.ServiceAccountName,
+					AutomountServiceAccountToken: automountToken(app),
+					SecurityContext:              podSecurityContext(app),
+					Volumes:                      scratchVolumes(app),
 				},
 			},
 		},
@@ -68,6 +72,13 @@ func podLabels(app *v1alpha1.WebApp) map[string]string {
 	maps.Copy(l, app.Spec.PodLabels)
 	maps.Copy(l, Labels(app))
 	return l
+}
+
+func automountToken(app *v1alpha1.WebApp) *bool {
+	if app.Spec.AutomountServiceAccountToken != nil {
+		return app.Spec.AutomountServiceAccountToken
+	}
+	return new(false)
 }
 
 func podSecurityContext(app *v1alpha1.WebApp) *corev1.PodSecurityContext {
@@ -99,7 +110,17 @@ func containerSecurityContext(c v1alpha1.Container) *corev1.SecurityContext {
 }
 
 func ScratchVolumeName(c v1alpha1.Container, v v1alpha1.ScratchVolume) string {
-	return c.Name + "-" + v.Name
+	sum := sha256.Sum256([]byte(c.Name + "\x00" + v.Name))
+	suffix := hex.EncodeToString(sum[:4])
+	base := strings.TrimRight(truncate(v.Name, 63-1-len(suffix)), "-")
+	return base + "-" + suffix
+}
+
+func truncate(s string, n int) string {
+	if len(s) <= n {
+		return s
+	}
+	return s[:n]
 }
 
 func scratchVolumes(app *v1alpha1.WebApp) []corev1.Volume {

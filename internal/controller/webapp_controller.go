@@ -10,6 +10,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	networkingv1 "k8s.io/api/networking/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/runtime"
 	appsv1ac "k8s.io/client-go/applyconfigurations/apps/v1"
@@ -40,7 +41,7 @@ type WebAppReconciler struct {
 	Recorder record.EventRecorder
 }
 
-// +kubebuilder:rbac:groups=webapps.example.com,resources=webapps,verbs=get;list;watch;create;update;patch;delete
+// +kubebuilder:rbac:groups=webapps.example.com,resources=webapps,verbs=get;list;watch;update;patch
 // +kubebuilder:rbac:groups=webapps.example.com,resources=webapps/status,verbs=get;update;patch
 // +kubebuilder:rbac:groups=webapps.example.com,resources=webapps/finalizers,verbs=update
 // +kubebuilder:rbac:groups=apps,resources=deployments,verbs=get;list;watch;create;update;patch;delete
@@ -99,6 +100,12 @@ func (r *WebAppReconciler) reconcile(ctx context.Context, req ctrl.Request) (ctr
 		}
 		dep = nil
 	}
+	if app.Generation != app.Status.ObservedGeneration {
+		r.Recorder.Eventf(app, corev1.EventTypeNormal, "Reconciled",
+			"applied spec generation %d", app.Generation)
+	}
+	app.Status.ObservedGeneration = app.Generation
+
 	if dep != nil {
 		applyDeploymentConditions(app, dep)
 	} else {
@@ -108,20 +115,37 @@ func (r *WebAppReconciler) reconcile(ctx context.Context, req ctrl.Request) (ctr
 }
 
 func (r *WebAppReconciler) sync(ctx context.Context, app *v1alpha1.WebApp) error {
-	depAC, err := toApplyConfig[appsv1ac.DeploymentApplyConfiguration](resources.Deployment(app), deploymentGVK)
+	svc := resources.Service(app)
+	if len(svc.Spec.Ports) == 0 {
+		return fmt.Errorf("no container ports declared; the generated Service would be rejected")
+	}
+
+	dep := resources.Deployment(app)
+	depAC, err := toApplyConfig[appsv1ac.DeploymentApplyConfiguration](dep, deploymentGVK)
 	if err != nil {
 		return err
 	}
 	if resources.WantsHPA(app) {
-		depAC.Spec.Replicas = nil
+		hold, err := r.replicaHold(ctx, app)
+		if err != nil {
+			return err
+		}
+		depAC.Spec.Replicas = hold
 	}
-	if err := r.apply(ctx, depAC); err != nil {
-		return fmt.Errorf("apply deployment: %w", err)
-	}
-
-	svcAC, err := toApplyConfig[corev1ac.ServiceApplyConfiguration](resources.Service(app), serviceGVK)
+	svcAC, err := toApplyConfig[corev1ac.ServiceApplyConfiguration](svc, serviceGVK)
 	if err != nil {
 		return err
+	}
+
+	if err := r.assertAdoptable(ctx, app, &appsv1.Deployment{}, "deployment"); err != nil {
+		return err
+	}
+	if err := r.assertAdoptable(ctx, app, &corev1.Service{}, "service"); err != nil {
+		return err
+	}
+
+	if err := r.apply(ctx, depAC); err != nil {
+		return fmt.Errorf("apply deployment: %w", err)
 	}
 	if err := r.apply(ctx, svcAC); err != nil {
 		return fmt.Errorf("apply service: %w", err)
@@ -131,6 +155,27 @@ func (r *WebAppReconciler) sync(ctx context.Context, app *v1alpha1.WebApp) error
 		return err
 	}
 	return r.syncHPA(ctx, app)
+}
+
+func (r *WebAppReconciler) replicaHold(ctx context.Context, app *v1alpha1.WebApp) (*int32, error) {
+	key := client.ObjectKeyFromObject(app)
+
+	err := r.Get(ctx, key, &autoscalingv2.HorizontalPodAutoscaler{})
+	switch {
+	case err == nil:
+		return nil, nil
+	case !apierrors.IsNotFound(err):
+		return nil, fmt.Errorf("get hpa: %w", err)
+	}
+
+	var dep appsv1.Deployment
+	if err := r.Get(ctx, key, &dep); err != nil {
+		if apierrors.IsNotFound(err) {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("get deployment: %w", err)
+	}
+	return dep.Spec.Replicas, nil
 }
 
 func (r *WebAppReconciler) syncIngress(ctx context.Context, app *v1alpha1.WebApp) error {
@@ -144,6 +189,9 @@ func (r *WebAppReconciler) syncIngress(ctx context.Context, app *v1alpha1.WebApp
 	}
 	ac, err := toApplyConfig[networkingv1ac.IngressApplyConfiguration](ing, ingressGVK)
 	if err != nil {
+		return err
+	}
+	if err := r.assertAdoptable(ctx, app, &networkingv1.Ingress{}, "ingress"); err != nil {
 		return err
 	}
 	if err := r.apply(ctx, ac); err != nil {
@@ -166,6 +214,9 @@ func (r *WebAppReconciler) syncHPA(ctx context.Context, app *v1alpha1.WebApp) er
 	if err != nil {
 		return err
 	}
+	if err := r.assertAdoptable(ctx, app, &autoscalingv2.HorizontalPodAutoscaler{}, "hpa"); err != nil {
+		return err
+	}
 	if err := r.apply(ctx, ac); err != nil {
 		return fmt.Errorf("apply hpa: %w", err)
 	}
@@ -173,10 +224,30 @@ func (r *WebAppReconciler) syncHPA(ctx context.Context, app *v1alpha1.WebApp) er
 }
 
 func (r *WebAppReconciler) deleteOwned(ctx context.Context, app *v1alpha1.WebApp, obj client.Object) error {
-	obj.SetName(app.Name)
-	obj.SetNamespace(app.Namespace)
+	if err := r.Get(ctx, client.ObjectKeyFromObject(app), obj); err != nil {
+		if apierrors.IsNotFound(err) {
+			return nil
+		}
+		return fmt.Errorf("get %T: %w", obj, err)
+	}
+	if !metav1.IsControlledBy(obj, app) {
+		return nil
+	}
 	if err := r.Delete(ctx, obj); err != nil && !apierrors.IsNotFound(err) {
 		return fmt.Errorf("delete %T: %w", obj, err)
+	}
+	return nil
+}
+
+func (r *WebAppReconciler) assertAdoptable(ctx context.Context, app *v1alpha1.WebApp, obj client.Object, kind string) error {
+	if err := r.Get(ctx, client.ObjectKeyFromObject(app), obj); err != nil {
+		if apierrors.IsNotFound(err) {
+			return nil
+		}
+		return fmt.Errorf("get %s: %w", kind, err)
+	}
+	if !metav1.IsControlledBy(obj, app) {
+		return fmt.Errorf("%s %q already exists and is not controlled by this WebApp", kind, app.Name)
 	}
 	return nil
 }

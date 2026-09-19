@@ -18,6 +18,8 @@ const (
 	ReasonNotReady        = "ReplicasNotReady"
 	ReasonNoDeployment    = "DeploymentNotFound"
 	ReasonReconciled      = "Reconciled"
+	ReasonRolloutPending  = "RolloutPending"
+	ReasonScaledToZero    = "ScaledToZero"
 )
 
 func setCondition(app *v1alpha1.WebApp, condType string, status metav1.ConditionStatus, reason, msg string) {
@@ -78,6 +80,12 @@ func setReady(app *v1alpha1.WebApp, dep *appsv1.Deployment, stalled bool) {
 	case stalled:
 		setCondition(app, v1alpha1.ConditionReady, metav1.ConditionFalse, ReasonRolloutStalled,
 			"rollout stalled; see Degraded condition")
+	case dep.Status.ObservedGeneration < dep.Generation:
+		setCondition(app, v1alpha1.ConditionReady, metav1.ConditionFalse, ReasonRolloutPending,
+			"deployment has not yet observed the current template")
+	case desired == 0:
+		setCondition(app, v1alpha1.ConditionReady, metav1.ConditionFalse, ReasonScaledToZero,
+			"scaled to zero replicas")
 	case dep.Status.UpdatedReplicas == desired && dep.Status.ReadyReplicas == desired:
 		setCondition(app, v1alpha1.ConditionReady, metav1.ConditionTrue, ReasonAllReplicas,
 			"all replicas are ready and running the current template")

@@ -80,8 +80,6 @@ rules:
   resources:
   - webapps
   verbs:
-  - create
-  - delete
   - get
   - list
   - patch
