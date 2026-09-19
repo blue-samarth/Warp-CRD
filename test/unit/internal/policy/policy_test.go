@@ -221,8 +221,10 @@ func TestEvaluate_InvalidSelectorFailsOnlyItsOwnPolicy(t *testing.T) {
 	if len(res.Violations) != 0 {
 		t.Fatalf("a broken policy must not deny anything, got %v", res.Violations)
 	}
-	if len(res.Audited) != 1 || !strings.Contains(res.Audited[0], "broken") {
-		t.Fatalf("want the skip recorded against its policy, got %v", res.Audited)
+	// Surfaced to whoever writes the WebApp, not buried in the operator log:
+	// a guardrail that has stopped applying should be visible.
+	if len(res.Warnings) != 1 || !strings.Contains(res.Warnings[0], "broken") {
+		t.Fatalf("want the skip warned about, got %v", res.Warnings)
 	}
 }
 
@@ -329,5 +331,20 @@ func TestEvaluate_MultiplePoliciesAccumulate(t *testing.T) {
 	}
 	if len(res.Violations) != 2 {
 		t.Fatalf("want violations from both policies, got %v", res.Violations)
+	}
+}
+
+func TestValidate_RejectsEmptyPolicyInputs(t *testing.T) {
+	p := basePolicy()
+	p.Spec.AllowedServiceAccounts = []string{"web", ""}
+	p.Spec.ForbiddenPodAnnotationPrefixes = []string{""}
+
+	errs := Validate(&p)
+	joined := errs.ToAggregate().Error()
+	if len(errs) != 2 {
+		t.Fatalf("want both empties rejected, got %v", errs)
+	}
+	if !strings.Contains(joined, "forbids every annotation") {
+		t.Fatalf("want the empty prefix called out, got %q", joined)
 	}
 }

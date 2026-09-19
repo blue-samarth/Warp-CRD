@@ -37,7 +37,8 @@ func Evaluate(app *v1alpha1.WebApp, policies []v1alpha1.WebAppPolicy, nsLabels m
 		p := &policies[i]
 		ok, err := Matches(p, nsLabels)
 		if err != nil {
-			res.Audited = append(res.Audited, fmt.Sprintf("policy %q skipped: %s", p.Name, err))
+			res.Warnings = append(res.Warnings,
+				fmt.Sprintf("policy %q is not being enforced: %s", p.Name, err))
 			continue
 		}
 		if !ok {
@@ -54,7 +55,8 @@ func EvaluateScale(app *v1alpha1.WebApp, policies []v1alpha1.WebAppPolicy, nsLab
 		p := &policies[i]
 		ok, err := Matches(p, nsLabels)
 		if err != nil {
-			res.Audited = append(res.Audited, fmt.Sprintf("policy %q skipped: %s", p.Name, err))
+			res.Warnings = append(res.Warnings,
+				fmt.Sprintf("policy %q is not being enforced: %s", p.Name, err))
 			continue
 		}
 		if !ok {
@@ -200,6 +202,20 @@ func Validate(p *v1alpha1.WebAppPolicy) field.ErrorList {
 		if _, err := metav1.LabelSelectorAsSelector(p.Spec.NamespaceSelector); err != nil {
 			errs = append(errs, field.Invalid(spec.Child("namespaceSelector"),
 				p.Spec.NamespaceSelector, err.Error()))
+		}
+	}
+
+	for i, sa := range p.Spec.AllowedServiceAccounts {
+		if strings.TrimSpace(sa) == "" {
+			errs = append(errs, field.Invalid(
+				spec.Child("allowedServiceAccounts").Index(i), sa, "must not be empty"))
+		}
+	}
+	for i, prefix := range p.Spec.ForbiddenPodAnnotationPrefixes {
+		if strings.TrimSpace(prefix) == "" {
+			errs = append(errs, field.Invalid(
+				spec.Child("forbiddenPodAnnotationPrefixes").Index(i), prefix,
+				"an empty prefix forbids every annotation"))
 		}
 	}
 

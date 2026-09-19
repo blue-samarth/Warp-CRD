@@ -1,0 +1,15 @@
+# Every WebApp write goes through webhooks with failurePolicy Fail, so losing
+# the last serving pod blocks writes cluster-wide. A drain must leave one up.
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: controller-manager
+  namespace: system
+  labels:
+    app.kubernetes.io/name: webapp-operator
+    control-plane: controller-manager
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels:
+      control-plane: controller-manager

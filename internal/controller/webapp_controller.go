@@ -51,8 +51,19 @@ var (
 
 type WebAppReconciler struct {
 	client.Client
-	Scheme   *runtime.Scheme
-	Recorder record.EventRecorder
+	// APIReader bypasses the cache. Adoption and policy decisions are made
+	// against live state: a cached miss would let SSA with ForceOwnership take
+	// over an object created in the gap.
+	APIReader client.Reader
+	Scheme    *runtime.Scheme
+	Recorder  record.EventRecorder
+}
+
+func (r *WebAppReconciler) reader() client.Reader {
+	if r.APIReader != nil {
+		return r.APIReader
+	}
+	return r.Client
 }
 
 // +kubebuilder:rbac:groups=webapps.example.com,resources=webapps,verbs=get;list;watch;update;patch
@@ -187,14 +198,14 @@ func (r *WebAppReconciler) sync(ctx context.Context, app *v1alpha1.WebApp) error
 
 func (r *WebAppReconciler) enforceScalePolicy(ctx context.Context, app *v1alpha1.WebApp) error {
 	var policies v1alpha1.WebAppPolicyList
-	if err := r.List(ctx, &policies); err != nil {
+	if err := r.reader().List(ctx, &policies); err != nil {
 		return fmt.Errorf("list webapppolicies: %w", err)
 	}
 	if len(policies.Items) == 0 {
 		return nil
 	}
 	var ns corev1.Namespace
-	if err := r.Get(ctx, types.NamespacedName{Name: app.Namespace}, &ns); err != nil {
+	if err := r.reader().Get(ctx, types.NamespacedName{Name: app.Namespace}, &ns); err != nil {
 		return fmt.Errorf("get namespace %q: %w", app.Namespace, err)
 	}
 	res, err := policy.EvaluateScale(app, policies.Items, ns.Labels)
@@ -316,7 +327,7 @@ func (r *WebAppReconciler) deleteOwned(ctx context.Context, app *v1alpha1.WebApp
 }
 
 func (r *WebAppReconciler) assertAdoptable(ctx context.Context, app *v1alpha1.WebApp, obj client.Object, kind string) error {
-	if err := r.Get(ctx, client.ObjectKeyFromObject(app), obj); err != nil {
+	if err := r.reader().Get(ctx, client.ObjectKeyFromObject(app), obj); err != nil {
 		if apierrors.IsNotFound(err) {
 			return nil
 		}

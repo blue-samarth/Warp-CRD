@@ -125,20 +125,19 @@ func TestPolicy_EnforcesMaxReplicas(t *testing.T) {
 	})
 
 	ns := newNamespace(t)
+	// The validator reads policies with the API reader, so the policy is in
+	// force immediately; each attempt uses a fresh name so a success cannot be
+	// mistaken for AlreadyExists.
 	app := baseWebApp(ns, "too-many")
 	app.Spec.Replicas = new(int32(9))
 
-	// The validator reads policies through the manager cache, so allow it to catch up.
-	eventually(t, func() error {
-		err := k8sClient.Create(testCtx, app.DeepCopy())
-		if err == nil {
-			return fmt.Errorf("policy not enforced yet")
-		}
-		if !strings.Contains(err.Error(), "at most 2 replicas") {
-			return fmt.Errorf("unexpected error: %v", err)
-		}
-		return nil
-	})
+	err := k8sClient.Create(testCtx, app)
+	if err == nil {
+		t.Fatal("want the policy enforced on the first write")
+	}
+	if !strings.Contains(err.Error(), "at most 2 replicas") {
+		t.Fatalf("unexpected error: %v", err)
+	}
 }
 
 func TestPolicy_AllowsCompliantWebApp(t *testing.T) {
@@ -176,16 +175,13 @@ func TestPolicy_EnforcesMinimumRequests(t *testing.T) {
 		Requests: corev1.ResourceList{corev1.ResourceCPU: resource.MustParse("10m")},
 	}
 
-	eventually(t, func() error {
-		err := k8sClient.Create(testCtx, app.DeepCopy())
-		if err == nil {
-			return fmt.Errorf("policy not enforced yet")
-		}
-		if !strings.Contains(err.Error(), "at least 100m") {
-			return fmt.Errorf("unexpected error: %v", err)
-		}
-		return nil
-	})
+	err := k8sClient.Create(testCtx, app)
+	if err == nil {
+		t.Fatal("want the policy enforced on the first write")
+	}
+	if !strings.Contains(err.Error(), "at least 100m") {
+		t.Fatalf("unexpected error: %v", err)
+	}
 }
 
 func TestPolicy_NamespaceSelectorScopesEnforcement(t *testing.T) {

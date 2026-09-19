@@ -125,7 +125,7 @@ jobs:
             || fail "ServiceMonitor serverName does not match the metrics service"
           grep -q 'namespace: webapp-operator-system' dist/monitor.yaml \
             || fail "ServiceMonitor is not co-located with the metrics service"
-          grep -qv 'insecureSkipVerify' dist/monitor.yaml \
+          ! grep -q 'insecureSkipVerify' dist/monitor.yaml \
             || fail "ServiceMonitor still skips TLS verification"
           echo "all cross-references resolve"
       - uses: actions/upload-artifact@v4

@@ -33,7 +33,7 @@ import (
 func SetupWebAppWebhook(mgr ctrl.Manager) error {
 	return builder.WebhookManagedBy(mgr, &apiv1alpha1.WebApp{}).
 		WithDefaulter(WebAppDefaulter{}).
-		WithValidator(WebAppValidator{Client: mgr.GetClient()}).
+		WithValidator(WebAppValidator{Reader: mgr.GetAPIReader()}).
 		Complete()
 }
 
@@ -45,7 +45,7 @@ func (WebAppDefaulter) Default(_ context.Context, app *apiv1alpha1.WebApp) error
 }
 
 type WebAppValidator struct {
-	Client client.Client
+	Reader client.Reader
 }
 
 func (v WebAppValidator) ValidateCreate(ctx context.Context, app *apiv1alpha1.WebApp) (admission.Warnings, error) {
@@ -79,18 +79,18 @@ func (v WebAppValidator) validate(ctx context.Context, app *apiv1alpha1.WebApp) 
 }
 
 func (v WebAppValidator) evaluatePolicies(ctx context.Context, app *apiv1alpha1.WebApp) (policy.Result, error) {
-	if v.Client == nil {
+	if v.Reader == nil {
 		return policy.Result{}, nil
 	}
 	var policies apiv1alpha1.WebAppPolicyList
-	if err := v.Client.List(ctx, &policies); err != nil {
+	if err := v.Reader.List(ctx, &policies); err != nil {
 		return policy.Result{}, fmt.Errorf("list webapppolicies: %w", err)
 	}
 	if len(policies.Items) == 0 {
 		return policy.Result{}, nil
 	}
 	var ns corev1.Namespace
-	if err := v.Client.Get(ctx, types.NamespacedName{Name: app.Namespace}, &ns); err != nil {
+	if err := v.Reader.Get(ctx, types.NamespacedName{Name: app.Namespace}, &ns); err != nil {
 		return policy.Result{}, fmt.Errorf("get namespace %q: %w", app.Namespace, err)
 	}
 	return policy.Evaluate(app, policies.Items, ns.Labels)
@@ -246,6 +246,15 @@ func ValidateSpec(app *apiv1alpha1.WebApp) field.ErrorList {
 			}
 		}
 		errs = append(errs, missingUtilizationRequests(app, a)...)
+	}
+
+	seen := map[string]bool{}
+	for _, name := range resources.PortNames(app) {
+		if seen[name] {
+			errs = append(errs, field.Duplicate(spec.Child("containers").Child("ports").Child("name"),
+				fmt.Sprintf("%s (an explicit name collides with one generated for an unnamed port)", name)))
+		}
+		seen[name] = true
 	}
 
 	if want := app.Spec.IngressPortName; want != "" && !slices.Contains(resources.PortNames(app), want) {

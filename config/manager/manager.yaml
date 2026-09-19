@@ -18,7 +18,7 @@ spec:
   selector:
     matchLabels:
       control-plane: controller-manager
-  replicas: 1
+  replicas: 2
   template:
     metadata:
       annotations:
@@ -63,7 +63,7 @@ spec:
               memory: 64Mi
             limits:
               cpu: 500m
-              memory: 128Mi
+              memory: 512Mi
           volumeMounts:
             - name: cert
               mountPath: /tmp/k8s-webhook-server/serving-certs

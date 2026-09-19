@@ -506,7 +506,10 @@ unreachable. It cannot be left unset, because the `scale` subresource resolves
 `.spec.replicas` on every read and fails with `does not exist` otherwise.
 
 The operator also leaves the WebApp's own labels alone — only the objects it
-generates are labelled, so Helm and Argo keep ownership of the WebApp.
+generates are labelled, so Helm and Argo keep ownership of the WebApp. That
+label is what scopes the informer caches: the operator watches only what it
+manages, and adoption checks bypass the cache so a foreign object missing from
+it is never silently taken over.
 
 Defaulting is idempotent.
 
@@ -600,7 +603,11 @@ spec:
   bounded only by the node's ephemeral storage.
 
 - `namespaceSelector` matches the **namespace's** labels. Omitted or empty both
-  mean every namespace.
+  mean every namespace. **Namespace labels are editable by anyone with namespace
+  write access**, so a tenant who can relabel their own namespace can move out
+  of a policy's scope. Select on `kubernetes.io/metadata.name` (which the API
+  server sets and protects) for policies that must not be escapable, and
+  restrict who can patch namespaces.
 - Every matching policy is evaluated and violations accumulate; policies do not
   override one another. There is no precedence and no merging — a violation of
   any matching `Enforce` policy rejects the write.

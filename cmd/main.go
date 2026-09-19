@@ -5,6 +5,16 @@ import (
 	"flag"
 	"os"
 
+	appsv1 "k8s.io/api/apps/v1"
+	autoscalingv2 "k8s.io/api/autoscaling/v2"
+	corev1 "k8s.io/api/core/v1"
+	networkingv1 "k8s.io/api/networking/v1"
+	"k8s.io/apimachinery/pkg/labels"
+	"sigs.k8s.io/controller-runtime/pkg/cache"
+	"sigs.k8s.io/controller-runtime/pkg/client"
+
+	"github.com/blue-samarth/Warp-CRD/internal/resources"
+
 	"k8s.io/apimachinery/pkg/runtime"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
 	ctrl "sigs.k8s.io/controller-runtime"
@@ -62,9 +72,25 @@ func main() {
 		metricsOpts.CertDir = metricsCertDir
 	}
 
+	// Every object the operator creates carries this label, so the informers
+	// only have to hold what it manages. Adoption reads bypass the cache, so a
+	// foreign object missing from it cannot be silently taken over.
+	managed := labels.SelectorFromSet(labels.Set{
+		resources.ManagedByLabel: resources.ManagedByValue,
+	})
+	byManaged := cache.ByObject{Label: managed}
+
 	mgr, err := ctrl.NewManager(ctrl.GetConfigOrDie(), ctrl.Options{
 		Scheme:  scheme,
 		Metrics: metricsOpts,
+		Cache: cache.Options{
+			ByObject: map[client.Object]cache.ByObject{
+				&appsv1.Deployment{}:                     byManaged,
+				&corev1.Service{}:                        byManaged,
+				&networkingv1.Ingress{}:                  byManaged,
+				&autoscalingv2.HorizontalPodAutoscaler{}: byManaged,
+			},
+		},
 		WebhookServer: webhook.NewServer(webhook.Options{
 			CertDir: webhookCertDir,
 			TLSOpts: []func(*tls.Config){func(c *tls.Config) { c.MinVersion = tls.VersionTLS12 }},
@@ -79,9 +105,10 @@ func main() {
 	}
 
 	if err := (&controller.WebAppReconciler{
-		Client:   mgr.GetClient(),
-		Scheme:   mgr.GetScheme(),
-		Recorder: mgr.GetEventRecorderFor("webapp-controller"),
+		Client:    mgr.GetClient(),
+		APIReader: mgr.GetAPIReader(),
+		Scheme:    mgr.GetScheme(),
+		Recorder:  mgr.GetEventRecorderFor("webapp-controller"),
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "WebApp")
 		os.Exit(1)

@@ -264,7 +264,7 @@ func validatorWith(t *testing.T, funcs interceptor.Funcs, objs ...client.Object)
 		t.Fatal(err)
 	}
 	return WebAppValidator{
-		Client: fake.NewClientBuilder().WithScheme(s).WithObjects(objs...).
+		Reader: fake.NewClientBuilder().WithScheme(s).WithObjects(objs...).
 			WithInterceptorFuncs(funcs).Build(),
 	}
 }
@@ -533,5 +533,18 @@ func TestValidate_RejectsDuplicateContainerNames(t *testing.T) {
 	})
 	if got := fieldErrors(t, app); !strings.Contains(got, "Duplicate value") {
 		t.Fatalf("want duplicate container name error, got %q", got)
+	}
+}
+
+func TestValidate_RejectsExplicitNameCollidingWithGeneratedOne(t *testing.T) {
+	app := baseApp()
+	app.Spec.Containers[0].Ports = []v1alpha1.ContainerPort{
+		{Name: "port-8080", ContainerPort: 9000},
+		{ContainerPort: 8080},
+	}
+	// The unnamed 8080 generates "port-8080", so the Service would carry the
+	// same port name twice and the API server would reject it.
+	if got := fieldErrors(t, app); !strings.Contains(got, "collides with one generated") {
+		t.Fatalf("want the collision rejected, got %q", got)
 	}
 }
