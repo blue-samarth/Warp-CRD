@@ -1,0 +1,12 @@
+# An object already carrying a deletionTimestamp is being finalized. The only
+# writes left are the controller removing its own finalizer, and re-validating
+# those lets a tightened WebAppPolicy strand the object in Terminating.
+#
+# This is a matchCondition rather than a check in the webhook because the API
+# server evaluates it: with failurePolicy Fail, deletion still completes when
+# the webhook is unreachable or the operator has been uninstalled.
+- op: add
+  path: /webhooks/0/matchConditions
+  value:
+    - name: skip-deleting
+      expression: "object == null || !has(object.metadata.deletionTimestamp)"
