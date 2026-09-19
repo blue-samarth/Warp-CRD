@@ -2,5 +2,22 @@ resources:
   - manifests.yaml
   - service.yaml
 
+patches:
+  - path: match_conditions.yaml
+    target:
+      group: admissionregistration.k8s.io
+      kind: MutatingWebhookConfiguration
+      name: mutating-webhook-configuration
+  - path: match_conditions.yaml
+    target:
+      group: admissionregistration.k8s.io
+      kind: ValidatingWebhookConfiguration
+      name: validating-webhook-configuration
+  - path: match_conditions_webapppolicy.yaml
+    target:
+      group: admissionregistration.k8s.io
+      kind: ValidatingWebhookConfiguration
+      name: validating-webhook-configuration
+
 configurations:
   - kustomizeconfig.yaml

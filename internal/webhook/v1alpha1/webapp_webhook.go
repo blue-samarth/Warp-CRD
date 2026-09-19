@@ -8,6 +8,7 @@ import (
 
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/api/equality"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/validation"
@@ -51,7 +52,10 @@ func (v WebAppValidator) ValidateCreate(ctx context.Context, app *apiv1alpha1.We
 	return v.validate(ctx, app)
 }
 
-func (v WebAppValidator) ValidateUpdate(ctx context.Context, _, app *apiv1alpha1.WebApp) (admission.Warnings, error) {
+func (v WebAppValidator) ValidateUpdate(ctx context.Context, old, app *apiv1alpha1.WebApp) (admission.Warnings, error) {
+	if !app.DeletionTimestamp.IsZero() || equality.Semantic.DeepEqual(old.Spec, app.Spec) {
+		return nil, nil
+	}
 	return v.validate(ctx, app)
 }
 

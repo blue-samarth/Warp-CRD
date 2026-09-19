@@ -42,27 +42,46 @@ func Evaluate(app *v1alpha1.WebApp, policies []v1alpha1.WebAppPolicy, nsLabels m
 		if !ok {
 			continue
 		}
-		errs := violations(app, p)
-		if len(errs) == 0 {
-			continue
-		}
-		switch p.Spec.Enforcement {
-		case v1alpha1.EnforcementWarn:
-			for _, e := range errs {
-				res.Warnings = append(res.Warnings, fmt.Sprintf("policy %q: %s", p.Name, e.Error()))
-			}
-		case v1alpha1.EnforcementAudit:
-			for _, e := range errs {
-				res.Audited = append(res.Audited, fmt.Sprintf("policy %q: %s", p.Name, e.Error()))
-			}
-		default:
-			res.Violations = append(res.Violations, errs...)
-		}
+		record(&res, p, violations(app, p))
 	}
 	return res, nil
 }
 
-func violations(app *v1alpha1.WebApp, p *v1alpha1.WebAppPolicy) field.ErrorList {
+func EvaluateScale(app *v1alpha1.WebApp, policies []v1alpha1.WebAppPolicy, nsLabels map[string]string) (Result, error) {
+	var res Result
+	for i := range policies {
+		p := &policies[i]
+		ok, err := Matches(p, nsLabels)
+		if err != nil {
+			return res, err
+		}
+		if !ok {
+			continue
+		}
+		record(&res, p, replicaViolations(app, p))
+	}
+	return res, nil
+}
+
+func record(res *Result, p *v1alpha1.WebAppPolicy, errs field.ErrorList) {
+	if len(errs) == 0 {
+		return
+	}
+	switch p.Spec.Enforcement {
+	case v1alpha1.EnforcementWarn:
+		for _, e := range errs {
+			res.Warnings = append(res.Warnings, fmt.Sprintf("policy %q: %s", p.Name, e.Error()))
+		}
+	case v1alpha1.EnforcementAudit:
+		for _, e := range errs {
+			res.Audited = append(res.Audited, fmt.Sprintf("policy %q: %s", p.Name, e.Error()))
+		}
+	default:
+		res.Violations = append(res.Violations, errs...)
+	}
+}
+
+func replicaViolations(app *v1alpha1.WebApp, p *v1alpha1.WebAppPolicy) field.ErrorList {
 	var errs field.ErrorList
 	spec := field.NewPath("spec")
 
@@ -77,6 +96,14 @@ func violations(app *v1alpha1.WebApp, p *v1alpha1.WebAppPolicy) field.ErrorList 
 				fmt.Sprintf("policy %q allows at most %d replicas", p.Name, *ceiling)))
 		}
 	}
+	return errs
+}
+
+func violations(app *v1alpha1.WebApp, p *v1alpha1.WebAppPolicy) field.ErrorList {
+	var errs field.ErrorList
+	spec := field.NewPath("spec")
+
+	errs = append(errs, replicaViolations(app, p)...)
 
 	if sa := app.Spec.ServiceAccountName; len(p.Spec.AllowedServiceAccounts) > 0 &&
 		!slices.Contains(p.Spec.AllowedServiceAccounts, sa) {
@@ -131,10 +158,9 @@ func violations(app *v1alpha1.WebApp, p *v1alpha1.WebAppPolicy) field.ErrorList 
 			floor := rp.MinRequests[name]
 			got, ok := c.Resources.Requests[name]
 			if !ok {
-				if rp.RequireRequests {
-					errs = append(errs, field.Required(cp.Child("requests").Key(string(name)),
-						fmt.Sprintf("policy %q requires at least %s", p.Name, floor.String())))
-				}
+				errs = append(errs, field.Required(cp.Child("requests").Key(string(name)),
+					fmt.Sprintf("policy %q requires at least %s; an absent request is zero",
+						p.Name, floor.String())))
 				continue
 			}
 			if got.Cmp(floor) < 0 {
@@ -147,10 +173,9 @@ func violations(app *v1alpha1.WebApp, p *v1alpha1.WebAppPolicy) field.ErrorList 
 			ceiling := rp.MaxLimits[name]
 			got, ok := c.Resources.Limits[name]
 			if !ok {
-				if rp.RequireLimits {
-					errs = append(errs, field.Required(cp.Child("limits").Key(string(name)),
-						fmt.Sprintf("policy %q requires a limit of at most %s", p.Name, ceiling.String())))
-				}
+				errs = append(errs, field.Required(cp.Child("limits").Key(string(name)),
+					fmt.Sprintf("policy %q allows at most %s; an absent limit is unlimited",
+						p.Name, ceiling.String())))
 				continue
 			}
 			if got.Cmp(ceiling) > 0 {

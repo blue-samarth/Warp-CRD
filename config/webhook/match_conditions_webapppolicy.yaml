@@ -1,0 +1,7 @@
+# The WebAppPolicy validator is the second entry in the same
+# ValidatingWebhookConfiguration and needs the same exclusion.
+- op: add
+  path: /webhooks/1/matchConditions
+  value:
+    - name: skip-deleting
+      expression: "object == null || !has(object.metadata.deletionTimestamp)"
