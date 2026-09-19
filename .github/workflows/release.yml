@@ -28,9 +28,19 @@ jobs:
           go-version-file: go.mod
           cache: true
 
+      # Expressions are substituted into the script before any shell sees it,
+      # so a dispatch input reaches the runner as code. Pass it through the
+      # environment, quote it, and refuse anything that is not a version.
       - name: Resolve version
         id: version
-        run: echo "tag=${{ inputs.tag || github.ref_name }}" >> "$GITHUB_OUTPUT"
+        env:
+          RAW_TAG: ${{ inputs.tag || github.ref_name }}
+        run: |
+          if ! printf '%s' "$RAW_TAG" | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+([-.+][0-9A-Za-z.-]+)?$'; then
+            echo "::error::refusing tag '$RAW_TAG'; expected vMAJOR.MINOR.PATCH"
+            exit 1
+          fi
+          printf 'tag=%s\n' "$RAW_TAG" >> "$GITHUB_OUTPUT"
 
       # The image is what gets deployed, so it does not ship unless the same
       # commit passes the suite that CI runs on a pull request.
@@ -57,9 +67,9 @@ jobs:
           cache-to: type=gha,mode=max
 
       - name: Render installer pinned to the published digest
-        run: |
-          make build-installer \
-            IMG=${{ env.REGISTRY }}/${{ github.repository }}@${{ steps.push.outputs.digest }}
+        env:
+          IMAGE_REF: ${{ env.REGISTRY }}/${{ github.repository }}@${{ steps.push.outputs.digest }}
+        run: make build-installer IMG="$IMAGE_REF"
 
       - uses: softprops/action-gh-release@v2
         if: startsWith(github.ref, 'refs/tags/')

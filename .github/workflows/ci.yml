@@ -95,7 +95,10 @@ jobs:
           key: tools-${{ runner.os }}-${{ hashFiles('Makefile') }}
       # A broken overlay is invisible to go test, so render every one that is
       # meant to be applied.
-      - run: make build-installer IMG=ghcr.io/${{ github.repository }}:ci
+      - name: Render the deployment overlay
+        env:
+          IMAGE_REF: ghcr.io/${{ github.repository }}:ci
+        run: make build-installer IMG="$IMAGE_REF"
       - name: Render the optional overlays
         run: |
           ./bin/kustomize build config/crd > /dev/null
