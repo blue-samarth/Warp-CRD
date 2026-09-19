@@ -1,0 +1,72 @@
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: MutatingWebhookConfiguration
+metadata:
+  name: mutating-webhook-configuration
+webhooks:
+- admissionReviewVersions:
+  - v1
+  clientConfig:
+    service:
+      name: webhook-service
+      namespace: system
+      path: /mutate-webapps-example-com-v1alpha1-webapp
+  failurePolicy: Fail
+  name: mwebapp.kb.io
+  rules:
+  - apiGroups:
+    - webapps.example.com
+    apiVersions:
+    - v1alpha1
+    operations:
+    - CREATE
+    - UPDATE
+    resources:
+    - webapps
+  sideEffects: None
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingWebhookConfiguration
+metadata:
+  name: validating-webhook-configuration
+webhooks:
+- admissionReviewVersions:
+  - v1
+  clientConfig:
+    service:
+      name: webhook-service
+      namespace: system
+      path: /validate-webapps-example-com-v1alpha1-webapp
+  failurePolicy: Fail
+  name: vwebapp.kb.io
+  rules:
+  - apiGroups:
+    - webapps.example.com
+    apiVersions:
+    - v1alpha1
+    operations:
+    - CREATE
+    - UPDATE
+    resources:
+    - webapps
+  sideEffects: None
+- admissionReviewVersions:
+  - v1
+  clientConfig:
+    service:
+      name: webhook-service
+      namespace: system
+      path: /validate-webapps-example-com-v1alpha1-webapppolicy
+  failurePolicy: Fail
+  name: vwebapppolicy.kb.io
+  rules:
+  - apiGroups:
+    - webapps.example.com
+    apiVersions:
+    - v1alpha1
+    operations:
+    - CREATE
+    - UPDATE
+    resources:
+    - webapppolicies
+  sideEffects: None
