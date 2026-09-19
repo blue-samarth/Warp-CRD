@@ -101,10 +101,36 @@ rejects() {
 # which would otherwise leave the working tree dirty after a local run.
 IMAGE_STAMP=config/manager/kustomization.yaml
 STAMP_BACKUP=
+DIAGNOSED=false
+
+# Dumped rather than pointed at, because the cluster is gone by the time anyone
+# reads a CI log.
+dump_diagnostics() {
+  DIAGNOSED=true
+  step "Certificates and Secrets"
+  kubectl -n "$NS" get certificates,secrets 2>&1 | sed 's/^/    /' || true
+
+  step "Operator logs (last 200 lines)"
+  kubectl -n "$NS" logs deploy/webapp-operator-controller-manager \
+    --all-containers --tail=200 2>&1 | sed 's/^/    /' || true
+
+  step "Operator pods"
+  kubectl -n "$NS" get pods -o wide 2>&1 | sed 's/^/    /' || true
+
+  step "Recent warnings across the test namespaces"
+  kubectl get events -A --field-selector type=Warning \
+    --sort-by=.lastTimestamp 2>&1 | tail -40 | sed 's/^/    /' || true
+
+  step "WebApps still present"
+  kubectl get webapps -A 2>&1 | sed 's/^/    /' || true
+}
 
 cleanup() {
   local rc=$?
   set +e
+  if [ "$rc" -ne 0 ] && [ "$DIAGNOSED" = false ] && kubectl cluster-info >/dev/null 2>&1; then
+    dump_diagnostics
+  fi
   if [ -n "$STAMP_BACKUP" ] && [ -f "$STAMP_BACKUP" ]; then
     cp "$STAMP_BACKUP" "$IMAGE_STAMP"
   fi
@@ -914,24 +940,6 @@ test_metrics_auth() {
     "") warn "could not run the probe pod (image pull?); skipping" ;;
     *) no "unauthenticated scrape rejected" "got HTTP $out" ;;
   esac
-}
-
-# Dumped rather than pointed at, because the cluster is gone by the time anyone
-# reads a CI log.
-dump_diagnostics() {
-  step "Operator logs (last 200 lines)"
-  kubectl -n "$NS" logs deploy/webapp-operator-controller-manager \
-    --all-containers --tail=200 2>&1 | sed 's/^/    /' || true
-
-  step "Operator pods"
-  kubectl -n "$NS" get pods -o wide 2>&1 | sed 's/^/    /' || true
-
-  step "Recent warnings across the test namespaces"
-  kubectl get events -A --field-selector type=Warning \
-    --sort-by=.lastTimestamp 2>&1 | tail -40 | sed 's/^/    /' || true
-
-  step "WebApps still present"
-  kubectl get webapps -A 2>&1 | sed 's/^/    /' || true
 }
 
 # ---------------------------------------------------------------- run

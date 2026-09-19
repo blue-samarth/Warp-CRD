@@ -79,6 +79,15 @@ test: generate manifests fmt vet envtest ## Run unit + envtest integration tests
 	@grep -v zz_generated cover.raw.out > cover.out
 	@go tool cover -func=cover.out | tail -1
 
+.PHONY: check-render
+check-render: build-installer kustomize ## Assert the rendered manifests resolve
+	$(KUSTOMIZE) build config/prometheus > dist/monitor.yaml
+	./hack/check-render.py dist/install.yaml dist/monitor.yaml
+
+.PHONY: e2e
+e2e: ## Full end-to-end run on a throwaway kind cluster (creates one if needed)
+	./hack/e2e.sh $(ARGS)
+
 .PHONY: build
 build: generate fmt vet
 	go build -o bin/manager ./cmd
