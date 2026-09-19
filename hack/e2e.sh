@@ -82,6 +82,22 @@ check() {
   if out=$("$@" 2>&1); then ok "$name"; else no "$name" "${out//$'\n'/ | }"; fi
 }
 
+# run_quiet LABEL COMMAND... -- captures both streams and prints them only when
+# the command fails. Redirecting stdout alone leaks buildkit progress and
+# "go: downloading" from every on-demand tool install.
+run_quiet() {
+  local label=$1; shift
+  local log
+  log="$WORK/$(printf '%s' "$label" | tr -c 'a-zA-Z0-9' '_').log"
+  if "$@" >"$log" 2>&1; then
+    info "$label"
+    return 0
+  fi
+  warn "$label failed:"
+  tail -60 "$log" | sed 's/^/      /'
+  return 1
+}
+
 # rejects NAME FILE -- passes when the API server refuses the manifest, and the
 # message contains the expected substring
 rejects() {
@@ -148,20 +164,20 @@ trap cleanup EXIT
 
 # ---------------------------------------------------------------- tooling
 
-need_root() { [ "$(id -u)" -eq 0 ] && SUDO="" || SUDO="sudo"; }
+as_root() {
+  if [ "$(id -u)" -eq 0 ]; then "$@"; else sudo "$@"; fi
+}
 
 install_tooling() {
   step "Checking tooling"
-  need_root
-
   if ! grep -qi ubuntu /etc/os-release 2>/dev/null; then
     warn "not Ubuntu; skipping package installation and assuming the tooling is present"
     SKIP_INSTALL=true
   fi
 
   if [ "$SKIP_INSTALL" = false ]; then
-    $SUDO apt-get update -qq
-    $SUDO apt-get install -y -qq curl ca-certificates git make jq >/dev/null
+    run_quiet "apt-get update" as_root apt-get update -qq
+    run_quiet "apt-get install" as_root apt-get install -y -qq curl ca-certificates git make jq
   fi
 
   if ! command -v docker >/dev/null; then
@@ -169,8 +185,8 @@ install_tooling() {
       echo "docker is required and not installed" >&2; exit 1
     fi
     info "installing docker"
-    curl -fsSL https://get.docker.com | $SUDO sh >/dev/null
-    $SUDO usermod -aG docker "$USER" || true
+    curl -fsSL https://get.docker.com | as_root sh >/dev/null 2>&1
+    as_root usermod -aG docker "$USER" || true
   fi
   if ! docker info >/dev/null 2>&1; then
     echo "docker is installed but not usable by $USER. Log out and back in (group change), or run with sudo." >&2
@@ -183,14 +199,14 @@ install_tooling() {
     local v
     v=$(curl -fsSL https://dl.k8s.io/release/stable.txt)
     curl -fsSLo "$WORK/kubectl" "https://dl.k8s.io/release/${v}/bin/linux/amd64/kubectl"
-    $SUDO install -m 0755 "$WORK/kubectl" /usr/local/bin/kubectl
+    as_root install -m 0755 "$WORK/kubectl" /usr/local/bin/kubectl
   fi
   info "kubectl $(kubectl version --client -o json | jq -r .clientVersion.gitVersion)"
 
   if ! command -v kind >/dev/null; then
     info "installing kind $KIND_VERSION"
     curl -fsSLo "$WORK/kind" "https://kind.sigs.k8s.io/dl/${KIND_VERSION}/kind-linux-amd64"
-    $SUDO install -m 0755 "$WORK/kind" /usr/local/bin/kind
+    as_root install -m 0755 "$WORK/kind" /usr/local/bin/kind
   fi
   info "kind $(kind version | awk '{print $2}')"
 
@@ -216,8 +232,8 @@ ensure_cluster() {
   fi
 
   info "no reachable cluster configured; creating kind cluster $CLUSTER"
-  kind create cluster --name "$CLUSTER" --wait 120s
   CREATED_CLUSTER=true
+  run_quiet "created kind cluster $CLUSTER" kind create cluster --name "$CLUSTER" --wait 120s
   kubectl cluster-info >/dev/null
   info "server $(kubectl version -o json | jq -r .serverVersion.gitVersion)"
 }
@@ -227,7 +243,8 @@ install_cert_manager() {
   if kubectl get deploy -n cert-manager cert-manager-webhook >/dev/null 2>&1; then
     info "already installed"
   else
-    kubectl apply -f "https://github.com/cert-manager/cert-manager/releases/download/${CERT_MANAGER_VERSION}/cert-manager.yaml" >/dev/null
+    run_quiet "applied cert-manager manifests" \
+      kubectl apply -f "https://github.com/cert-manager/cert-manager/releases/download/${CERT_MANAGER_VERSION}/cert-manager.yaml"
   fi
   kubectl -n cert-manager wait --for=condition=Available --timeout="$TIMEOUT" \
     deploy/cert-manager deploy/cert-manager-webhook deploy/cert-manager-cainjector >/dev/null
@@ -238,19 +255,17 @@ deploy_operator() {
   step "Building and deploying the operator"
   STAMP_BACKUP="$WORK/kustomization.yaml.orig"
   cp "$IMAGE_STAMP" "$STAMP_BACKUP"
-  make docker-build IMG="$IMG" >/dev/null
-  info "built $IMG"
+  run_quiet "built $IMG" make docker-build IMG="$IMG"
 
   if [ "$CREATED_CLUSTER" = true ] || kind get clusters 2>/dev/null | grep -qx "$CLUSTER"; then
-    kind load docker-image "$IMG" --name "$CLUSTER" >/dev/null
-    info "loaded into kind"
+    run_quiet "loaded $IMG into kind" kind load docker-image "$IMG" --name "$CLUSTER"
   else
     warn "not a kind cluster; $IMG must already be pullable from the nodes"
   fi
 
-  make deploy IMG="$IMG" >/dev/null
-  kubectl -n "$NS" rollout status deploy/webapp-operator-controller-manager --timeout="$TIMEOUT" >/dev/null
-  info "operator rolled out"
+  run_quiet "applied the deployment overlay" make deploy IMG="$IMG"
+  run_quiet "operator rolled out" kubectl -n "$NS" rollout status \
+    deploy/webapp-operator-controller-manager --timeout="$TIMEOUT"
 
   # The webhook is useless until cert-manager has injected the CA, and every
   # WebApp write fails closed until then.
@@ -263,6 +278,26 @@ deploy_operator() {
     sleep 2
   done
   info "CA injected"
+}
+
+# wait_object NS KIND NAME -- poll until the operator has created it
+wait_object() {
+  local n=$1 k=$2 name=$3 tries=0
+  until kubectl -n "$n" get "$k" "$name" >/dev/null 2>&1; do
+    tries=$((tries + 1))
+    [ "$tries" -gt 60 ] && { kubectl -n "$n" get "$k" "$name"; return 1; }
+    sleep 1
+  done
+}
+
+# absent NS KIND NAME -- poll until it is gone
+absent() {
+  local n=$1 k=$2 name=$3 tries=0
+  while kubectl -n "$n" get "$k" "$name" >/dev/null 2>&1; do
+    tries=$((tries + 1))
+    [ "$tries" -gt 60 ] && return 1
+    sleep 1
+  done
 }
 
 ns() { # create a fresh namespace and echo its name
@@ -290,8 +325,8 @@ spec:
       ports: [{name: http, containerPort: 8080}]
 EOF
   check "minimal WebApp is admitted" kubectl apply -f "$WORK/basic.yaml"
-  check "Deployment created" kubectl -n "$n" get deploy hello
-  check "Service created" kubectl -n "$n" get svc hello
+  check "Deployment created" wait_object "$n" deploy hello
+  check "Service created" wait_object "$n" svc hello
   check "no Ingress without a domain" bash -c "! kubectl -n $n get ingress hello >/dev/null 2>&1"
   check "no HPA without autoscaling" bash -c "! kubectl -n $n get hpa hello >/dev/null 2>&1"
 
@@ -331,13 +366,15 @@ spec:
       ports: [{name: http, containerPort: 8080}]
 EOF
   kubectl apply -f "$WORK/psa.yaml" >/dev/null
+  wait_object "$n" deploy hardened || true
 
   if kubectl -n "$n" wait --for=jsonpath='{.status.availableReplicas}'=1 \
       --timeout="$TIMEOUT" deploy/hardened >/dev/null 2>&1; then
     ok "pods admitted and available under enforce=restricted"
   else
     no "pods admitted under enforce=restricted" \
-       "$(kubectl -n "$n" get events --field-selector reason=FailedCreate -o jsonpath='{.items[-1:].message}')"
+       "$(kubectl -n "$n" get events --field-selector type=Warning \
+          -o custom-columns=:.message --no-headers 2>/dev/null | tail -3 | tr '\n' ';')"
   fi
 
   local sc
@@ -368,7 +405,7 @@ spec:
         - {name: admin, containerPort: 9901}
 EOF
   check "WebApp with a domain is admitted" kubectl apply -f "$WORK/ing.yaml"
-  check "Ingress created" kubectl -n "$n" get ingress routed
+  check "Ingress created" wait_object "$n" ingress routed
 
   local port host url
   port=$(kubectl -n "$n" get ingress routed -o jsonpath='{.spec.rules[0].http.paths[0].backend.service.port.name}')
@@ -383,12 +420,7 @@ EOF
   # Clearing the domain must remove the Ingress again.
   kubectl -n "$n" patch webapp routed --type=json \
     -p '[{"op":"remove","path":"/spec/domain"},{"op":"remove","path":"/spec/ingressPortName"}]' >/dev/null
-  local tries=0
-  until ! kubectl -n "$n" get ingress routed >/dev/null 2>&1; do
-    tries=$((tries + 1)); [ "$tries" -gt 30 ] && break; sleep 2
-  done
-  check "Ingress removed when the domain is cleared" \
-    bash -c "! kubectl -n $n get ingress routed >/dev/null 2>&1"
+  check "Ingress removed when the domain is cleared" absent "$n" ingress routed
 }
 
 test_scaling() {
@@ -406,6 +438,7 @@ spec:
       ports: [{name: http, containerPort: 8080}]
 EOF
   kubectl apply -f "$WORK/scale.yaml" >/dev/null
+  wait_object "$n" deploy scaled || true
   check "spec.replicas reaches the Deployment" \
     kubectl -n "$n" wait --for=jsonpath='{.spec.replicas}'=2 --timeout="$TIMEOUT" deploy/scaled
 
@@ -462,7 +495,7 @@ spec:
       resources: {requests: {cpu: 50m}}
 EOF
   check "utilisation target above 100 is accepted" kubectl apply -f "$WORK/hpa-ok.yaml"
-  check "HPA created" kubectl -n "$n" get hpa auto
+  check "HPA created" wait_object "$n" hpa auto
   local bounds
   bounds=$(kubectl -n "$n" get hpa auto -o jsonpath='{.spec.minReplicas}/{.spec.maxReplicas}')
   eq "HPA bounds match the spec" "2/6" "$bounds"
@@ -470,12 +503,7 @@ EOF
   # Turning autoscaling off again must remove the HPA.
   kubectl -n "$n" patch webapp auto --type=merge \
     -p '{"spec":{"autoscaling":{"enabled":false},"replicas":2}}' >/dev/null
-  local tries=0
-  until ! kubectl -n "$n" get hpa auto >/dev/null 2>&1; do
-    tries=$((tries + 1)); [ "$tries" -gt 30 ] && break; sleep 2
-  done
-  check "HPA removed when autoscaling is disabled" \
-    bash -c "! kubectl -n $n get hpa auto >/dev/null 2>&1"
+  check "HPA removed when autoscaling is disabled" absent "$n" hpa auto
 }
 
 test_scratch_and_probes() {
@@ -497,6 +525,10 @@ spec:
         - {name: cache, mountPath: /var/cache, medium: Memory, sizeLimit: 32Mi}
 EOF
   check "probes and scratch volumes are admitted" kubectl apply -f "$WORK/scratch.yaml"
+  if ! wait_object "$n" deploy scratchy; then
+    no "Deployment created for the scratch WebApp"
+    return
+  fi
 
   local vols mounts medium
   vols=$(kubectl -n "$n" get deploy scratchy -o json | jq '[.spec.template.spec.volumes[] | select(.emptyDir)] | length')
@@ -830,6 +862,7 @@ spec:
       resources: {requests: {cpu: 50m}}
 EOF
   check "a compliant WebApp is admitted" kubectl apply -f "$WORK/compliant.yaml"
+  wait_object "$n" deploy compliant || true
 
   # The scale subresource writes a Scale, which admission never sees, so the
   # ceiling has to be caught by the reconciler instead.
@@ -887,11 +920,15 @@ spec:
       resources: {requests: {cpu: 50m}}
 EOF
   kubectl apply -f "$WORK/del.yaml" >/dev/null
+  local all_present=true
   for k in deploy svc ingress hpa; do
-    kubectl -n "$n" get "$k" doomed >/dev/null 2>&1 || sleep 3
+    wait_object "$n" "$k" doomed || all_present=false
   done
-  check "all four objects exist before deletion" \
-    bash -c "kubectl -n $n get deploy,svc,ingress,hpa doomed >/dev/null 2>&1"
+  if [ "$all_present" = true ]; then
+    ok "all four objects exist before deletion"
+  else
+    no "all four objects exist before deletion" "$(kubectl -n "$n" get all,ingress -o name | tr '\n' ' ')"
+  fi
 
   local fin
   fin=$(kubectl -n "$n" get webapp doomed -o jsonpath='{.metadata.finalizers[0]}')
