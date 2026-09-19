@@ -20,7 +20,7 @@ spec:
           secret:
             name: metrics-server-cert
             key: ca.crt
-        serverName: controller-manager-metrics-service.system.svc
+        serverName: webapp-operator-controller-manager-metrics-service.system.svc
   selector:
     matchLabels:
       control-plane: controller-manager

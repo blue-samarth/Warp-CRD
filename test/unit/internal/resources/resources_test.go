@@ -30,11 +30,18 @@ func baseApp() *v1alpha1.WebApp {
 	}
 }
 
-func TestDesiredReplicas_DefaultsToOne(t *testing.T) {
+func TestDesiredReplicas_NilWhenUnset(t *testing.T) {
+	// Unset means "not ours": sending a value would snap a scaled app back.
+	if got := DesiredReplicas(baseApp()); got != nil {
+		t.Fatalf("want nil so the field stays unmanaged, got %d", *got)
+	}
+}
+
+func TestDesiredReplicas_PassesThroughWhenSet(t *testing.T) {
 	app := baseApp()
-	got := DesiredReplicas(app)
-	if got == nil || *got != 1 {
-		t.Fatalf("want 1, got %v", got)
+	app.Spec.Replicas = new(int32(4))
+	if got := DesiredReplicas(app); got == nil || *got != 4 {
+		t.Fatalf("want 4, got %v", got)
 	}
 }
 

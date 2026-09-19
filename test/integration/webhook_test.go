@@ -100,8 +100,10 @@ func TestWebhook_DefaultsAreApplied(t *testing.T) {
 	if app.Spec.ServiceType != corev1.ServiceTypeClusterIP {
 		t.Fatalf("want ClusterIP, got %q", app.Spec.ServiceType)
 	}
-	if app.Labels["app.kubernetes.io/managed-by"] != "webapp-operator" {
-		t.Fatalf("want managed-by label injected, got %v", app.Labels)
+	// The operator labels what it generates, not the user's own object:
+	// rewriting these fights Helm ownership checks and GitOps drift.
+	if _, ok := app.Labels["app.kubernetes.io/managed-by"]; ok {
+		t.Fatalf("webapp labels must be left alone, got %v", app.Labels)
 	}
 }
 

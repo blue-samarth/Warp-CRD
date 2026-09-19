@@ -37,7 +37,9 @@ func Evaluate(app *v1alpha1.WebApp, policies []v1alpha1.WebAppPolicy, nsLabels m
 		p := &policies[i]
 		ok, err := Matches(p, nsLabels)
 		if err != nil {
-			return res, err
+			record(&res, p, field.ErrorList{field.Invalid(
+				field.NewPath("spec", "namespaceSelector"), p.Spec.NamespaceSelector, err.Error())})
+			continue
 		}
 		if !ok {
 			continue
@@ -53,7 +55,9 @@ func EvaluateScale(app *v1alpha1.WebApp, policies []v1alpha1.WebAppPolicy, nsLab
 		p := &policies[i]
 		ok, err := Matches(p, nsLabels)
 		if err != nil {
-			return res, err
+			record(&res, p, field.ErrorList{field.Invalid(
+				field.NewPath("spec", "namespaceSelector"), p.Spec.NamespaceSelector, err.Error())})
+			continue
 		}
 		if !ok {
 			continue
@@ -105,8 +109,11 @@ func violations(app *v1alpha1.WebApp, p *v1alpha1.WebAppPolicy) field.ErrorList 
 
 	errs = append(errs, replicaViolations(app, p)...)
 
-	if sa := app.Spec.ServiceAccountName; len(p.Spec.AllowedServiceAccounts) > 0 &&
-		!slices.Contains(p.Spec.AllowedServiceAccounts, sa) {
+	sa := app.Spec.ServiceAccountName
+	if sa == "" {
+		sa = "default"
+	}
+	if len(p.Spec.AllowedServiceAccounts) > 0 && !slices.Contains(p.Spec.AllowedServiceAccounts, sa) {
 		errs = append(errs, field.Invalid(spec.Child("serviceAccountName"), sa,
 			fmt.Sprintf("policy %q allows only %v", p.Name, p.Spec.AllowedServiceAccounts)))
 	}

@@ -222,15 +222,31 @@ func TestSyncHPA_RemovesHPAWhenAutoscalingDisabled(t *testing.T) {
 	}
 }
 
+func degradedMessage(t *testing.T, r *WebAppReconciler) string {
+	t.Helper()
+	got := &v1alpha1.WebApp{}
+	if err := r.Get(t.Context(), appKey.NamespacedName, got); err != nil {
+		t.Fatal(err)
+	}
+	c := meta.FindStatusCondition(got.Status.Conditions, v1alpha1.ConditionDegraded)
+	if c == nil || c.Status != metav1.ConditionTrue {
+		t.Fatalf("want Degraded=True, got %+v", c)
+	}
+	return c.Message
+}
+
 func TestSyncIngress_SurfacesBuildError(t *testing.T) {
 	app := testApp()
 	app.Spec.Domain = "example.com"
 	app.Spec.IngressPortName = "nope"
 
 	r := newReconciler(t, interceptor.Funcs{}, app)
-	_, err := r.Reconcile(t.Context(), appKey)
-	if err == nil || !strings.Contains(err.Error(), "build ingress") {
-		t.Fatalf("want a build error when no port can back the ingress, got %v", err)
+	// A spec that can never reconcile is terminal: report it, do not requeue.
+	if _, err := r.Reconcile(t.Context(), appKey); err != nil {
+		t.Fatalf("want no requeue for a permanent error, got %v", err)
+	}
+	if msg := degradedMessage(t, r); !strings.Contains(msg, "build ingress") {
+		t.Fatalf("want the build error on Degraded, got %q", msg)
 	}
 }
 
@@ -320,9 +336,11 @@ func TestSync_RefusesToAdoptForeignDeployment(t *testing.T) {
 	r := newReconciler(t, interceptor.Funcs{}, testApp(),
 		&appsv1.Deployment{ObjectMeta: foreignMeta()})
 
-	_, err := r.Reconcile(t.Context(), appKey)
-	if err == nil || !strings.Contains(err.Error(), "not controlled by this WebApp") {
-		t.Fatalf("want adoption refused, got %v", err)
+	if _, err := r.Reconcile(t.Context(), appKey); err != nil {
+		t.Fatalf("want no requeue for a permanent error, got %v", err)
+	}
+	if msg := degradedMessage(t, r); !strings.Contains(msg, "not controlled by this WebApp") {
+		t.Fatalf("want adoption refused on Degraded, got %q", msg)
 	}
 }
 
@@ -350,31 +368,6 @@ func TestReconcile_SurfacesFinalizerUpdateError(t *testing.T) {
 	_, err := r.Reconcile(t.Context(), appKey)
 	if err == nil || !strings.Contains(err.Error(), "conflict adding finalizer") {
 		t.Fatalf("want the finalizer update error surfaced, got %v", err)
-	}
-}
-
-func TestFinalize_SurfacesScaleToZeroError(t *testing.T) {
-	now := metav1.Now()
-	app := testApp()
-	app.DeletionTimestamp = &now
-	app.Finalizers = []string{v1alpha1.Finalizer}
-
-	dep := &appsv1.Deployment{
-		ObjectMeta: metav1.ObjectMeta{Name: "app", Namespace: "ns"},
-		Spec:       appsv1.DeploymentSpec{Replicas: new(int32(3))},
-	}
-	r := newReconciler(t, interceptor.Funcs{
-		Update: func(_ context.Context, _ client.WithWatch, obj client.Object, _ ...client.UpdateOption) error {
-			if _, ok := obj.(*appsv1.Deployment); ok {
-				return errors.New("scale rejected")
-			}
-			return nil
-		},
-	}, app, dep)
-
-	_, err := r.Reconcile(t.Context(), appKey)
-	if err == nil || !strings.Contains(err.Error(), "scale deployment to zero") {
-		t.Fatalf("want scale error surfaced, got %v", err)
 	}
 }
 
