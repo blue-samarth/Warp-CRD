@@ -1,0 +1,11 @@
+# issuerRef.name is a field value, not metadata.name, so namePrefix does not
+# rewrite it on its own. Without this the Certificates reference an Issuer that
+# no longer exists, nothing is ever issued, and the manager sits in
+# ContainerCreating waiting for a Secret that never appears.
+nameReference:
+  - kind: Issuer
+    group: cert-manager.io
+    fieldSpecs:
+      - kind: Certificate
+        group: cert-manager.io
+        path: spec/issuerRef/name
