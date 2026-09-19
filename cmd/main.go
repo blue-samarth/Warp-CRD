@@ -36,12 +36,13 @@ func utilruntimeMust(err error) {
 }
 
 func main() {
-	var metricsAddr, probeAddr, webhookCertDir string
+	var metricsAddr, probeAddr, webhookCertDir, metricsCertDir string
 	var enableLeaderElection, enableWebhooks, secureMetrics bool
 
 	flag.StringVar(&metricsAddr, "metrics-bind-address", ":8443", "address the metric endpoint binds to")
 	flag.StringVar(&probeAddr, "health-probe-bind-address", ":8081", "address the probe endpoint binds to")
 	flag.StringVar(&webhookCertDir, "webhook-cert-dir", "/tmp/k8s-webhook-server/serving-certs", "directory holding the webhook serving certs")
+	flag.StringVar(&metricsCertDir, "metrics-cert-dir", "", "directory holding the metrics serving certs; empty serves an in-memory certificate for localhost")
 	flag.BoolVar(&enableLeaderElection, "leader-elect", false, "enable leader election for controller manager")
 	flag.BoolVar(&enableWebhooks, "enable-webhooks", true, "serve the admission webhooks")
 	flag.BoolVar(&secureMetrics, "metrics-secure", true, "serve metrics over HTTPS")
@@ -58,6 +59,7 @@ func main() {
 	}
 	if secureMetrics {
 		metricsOpts.FilterProvider = filters.WithAuthenticationAndAuthorization
+		metricsOpts.CertDir = metricsCertDir
 	}
 
 	mgr, err := ctrl.NewManager(ctrl.GetConfigOrDie(), ctrl.Options{

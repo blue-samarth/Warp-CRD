@@ -13,6 +13,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/types"
 	appsv1ac "k8s.io/client-go/applyconfigurations/apps/v1"
 	autoscalingv2ac "k8s.io/client-go/applyconfigurations/autoscaling/v2"
 	corev1ac "k8s.io/client-go/applyconfigurations/core/v1"
@@ -25,6 +26,7 @@ import (
 
 	"github.com/blue-samarth/Warp-CRD/api/v1alpha1"
 	"github.com/blue-samarth/Warp-CRD/internal/metrics"
+	"github.com/blue-samarth/Warp-CRD/internal/policy"
 	"github.com/blue-samarth/Warp-CRD/internal/resources"
 )
 
@@ -48,6 +50,8 @@ type WebAppReconciler struct {
 // +kubebuilder:rbac:groups="",resources=services,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=networking.k8s.io,resources=ingresses,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=autoscaling,resources=horizontalpodautoscalers,verbs=get;list;watch;create;update;patch;delete
+// +kubebuilder:rbac:groups=webapps.example.com,resources=webapppolicies,verbs=get;list;watch
+// +kubebuilder:rbac:groups="",resources=namespaces,verbs=get;list;watch
 // +kubebuilder:rbac:groups="",resources=events,verbs=create;patch
 
 func (r *WebAppReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
@@ -115,6 +119,10 @@ func (r *WebAppReconciler) reconcile(ctx context.Context, req ctrl.Request) (ctr
 }
 
 func (r *WebAppReconciler) sync(ctx context.Context, app *v1alpha1.WebApp) error {
+	if err := r.enforceScalePolicy(ctx, app); err != nil {
+		return err
+	}
+
 	svc := resources.Service(app)
 	if len(svc.Spec.Ports) == 0 {
 		return fmt.Errorf("no container ports declared; the generated Service would be rejected")
@@ -155,6 +163,35 @@ func (r *WebAppReconciler) sync(ctx context.Context, app *v1alpha1.WebApp) error
 		return err
 	}
 	return r.syncHPA(ctx, app)
+}
+
+func (r *WebAppReconciler) enforceScalePolicy(ctx context.Context, app *v1alpha1.WebApp) error {
+	var policies v1alpha1.WebAppPolicyList
+	if err := r.List(ctx, &policies); err != nil {
+		return fmt.Errorf("list webapppolicies: %w", err)
+	}
+	if len(policies.Items) == 0 {
+		return nil
+	}
+	var ns corev1.Namespace
+	if err := r.Get(ctx, types.NamespacedName{Name: app.Namespace}, &ns); err != nil {
+		return fmt.Errorf("get namespace %q: %w", app.Namespace, err)
+	}
+	res, err := policy.EvaluateScale(app, policies.Items, ns.Labels)
+	if err != nil {
+		return err
+	}
+	for _, w := range res.Warnings {
+		log.FromContext(ctx).Info("webapppolicy warning", "violation", w)
+	}
+	for _, a := range res.Audited {
+		log.FromContext(ctx).Info("webapppolicy audit", "violation", a)
+	}
+	if len(res.Violations) > 0 {
+		r.Recorder.Event(app, corev1.EventTypeWarning, "PolicyViolation", res.Violations.ToAggregate().Error())
+		return fmt.Errorf("webapppolicy: %w", res.Violations.ToAggregate())
+	}
+	return nil
 }
 
 func (r *WebAppReconciler) replicaHold(ctx context.Context, app *v1alpha1.WebApp) (*int32, error) {

@@ -1,0 +1,19 @@
+apiVersion: webapps.example.com/v1alpha1
+kind: WebAppPolicy
+metadata:
+  name: production-baseline
+spec:
+  enforcement: Enforce
+  namespaceSelector:
+    matchLabels:
+      tier: prod
+  maxReplicas: 20
+  resources:
+    requireRequests: true
+    requireLimits: true
+    minRequests:
+      cpu: 50m
+      memory: 64Mi
+    maxLimits:
+      cpu: "4"
+      memory: 8Gi

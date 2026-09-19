@@ -1,0 +1,11 @@
+apiVersion: webapps.example.com/v1alpha1
+kind: WebApp
+metadata:
+  name: hello
+spec:
+  containers:
+    - name: web
+      image: nginxinc/nginx-unprivileged:1.27
+      ports:
+        - name: http
+          containerPort: 8080

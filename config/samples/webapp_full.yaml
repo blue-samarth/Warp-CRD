@@ -1,0 +1,81 @@
+apiVersion: webapps.example.com/v1alpha1
+kind: WebApp
+metadata:
+  name: storefront
+spec:
+  domain: storefront.example.com
+  ingressClassName: nginx
+  ingressPortName: http
+  serviceType: ClusterIP
+
+  serviceAccountName: storefront
+  securityContext:
+    runAsUser: 10001
+    runAsGroup: 10001
+    fsGroup: 10001
+
+  containers:
+    - name: web
+      image: ghcr.io/example/storefront:1.4.2
+      ports:
+        - name: http
+          containerPort: 8080
+      env:
+        - name: LOG_LEVEL
+          value: info
+      envFrom:
+        - configMapRef:
+            name: storefront-config
+        - secretRef:
+            name: storefront-secrets
+      resources:
+        requests:
+          cpu: 100m
+          memory: 128Mi
+        limits:
+          cpu: "1"
+          memory: 512Mi
+      readinessProbe:
+        httpGet:
+          path: /healthz
+          port: http
+        initialDelaySeconds: 3
+      livenessProbe:
+        httpGet:
+          path: /healthz
+          port: http
+        periodSeconds: 10
+      securityContext:
+        readOnlyRootFilesystem: true
+      scratchVolumes:
+        - name: tmp
+          mountPath: /tmp
+          sizeLimit: 64Mi
+
+    - name: metrics-sidecar
+      image: ghcr.io/example/statsd-exporter:0.27.1
+      ports:
+        - name: metrics
+          containerPort: 9102
+      resources:
+        requests:
+          cpu: 10m
+          memory: 32Mi
+        limits:
+          cpu: 100m
+          memory: 64Mi
+
+  autoscaling:
+    enabled: true
+    minReplicas: 2
+    maxReplicas: 10
+    targetCPUUtilizationPercentage: 70
+
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 0
+      maxSurge: 1
+
+  nodeSelector:
+    kubernetes.io/os: linux
