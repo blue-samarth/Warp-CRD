@@ -38,6 +38,7 @@ spec:
           args:
             - --leader-elect
             - --health-probe-bind-address=:8081
+            - --metrics-cert-dir=/tmp/k8s-metrics-server/serving-certs
           securityContext:
             allowPrivilegeEscalation: false
             readOnlyRootFilesystem: true
@@ -67,10 +68,17 @@ spec:
             - name: cert
               mountPath: /tmp/k8s-webhook-server/serving-certs
               readOnly: true
+            - name: metrics-cert
+              mountPath: /tmp/k8s-metrics-server/serving-certs
+              readOnly: true
       volumes:
         - name: cert
           secret:
             defaultMode: 420
             secretName: webhook-server-cert
+        - name: metrics-cert
+          secret:
+            defaultMode: 420
+            secretName: metrics-server-cert
       serviceAccountName: controller-manager
       terminationGracePeriodSeconds: 10

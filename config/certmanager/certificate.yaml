@@ -23,3 +23,21 @@ spec:
     kind: Issuer
     name: selfsigned-issuer
   secretName: webhook-server-cert
+---
+# Without this the metrics server falls back to an in-memory certificate issued
+# for localhost, which no scraper can verify by service DNS.
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: metrics-cert
+  namespace: system
+  labels:
+    app.kubernetes.io/name: webapp-operator
+spec:
+  dnsNames:
+    - controller-manager-metrics-service.system.svc
+    - controller-manager-metrics-service.system.svc.cluster.local
+  issuerRef:
+    kind: Issuer
+    name: selfsigned-issuer
+  secretName: metrics-server-cert

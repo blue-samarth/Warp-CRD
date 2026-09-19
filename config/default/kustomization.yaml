@@ -101,3 +101,41 @@ replacements:
           delimiter: '/'
           index: 1
           create: true
+
+  - source:
+      kind: Service
+      version: v1
+      name: controller-manager-metrics-service
+      fieldPath: .metadata.name
+    targets:
+      - select:
+          kind: Certificate
+          group: cert-manager.io
+          version: v1
+          name: metrics-cert
+        fieldPaths:
+          - .spec.dnsNames.0
+          - .spec.dnsNames.1
+        options:
+          delimiter: '.'
+          index: 0
+          create: true
+
+  - source:
+      kind: Service
+      version: v1
+      name: controller-manager-metrics-service
+      fieldPath: .metadata.namespace
+    targets:
+      - select:
+          kind: Certificate
+          group: cert-manager.io
+          version: v1
+          name: metrics-cert
+        fieldPaths:
+          - .spec.dnsNames.0
+          - .spec.dnsNames.1
+        options:
+          delimiter: '.'
+          index: 1
+          create: true

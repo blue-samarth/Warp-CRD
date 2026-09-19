@@ -13,7 +13,14 @@ spec:
       scheme: https
       bearerTokenFile: /var/run/secrets/kubernetes.io/serviceaccount/token
       tlsConfig:
-        insecureSkipVerify: true
+        # cert-manager writes the issuing CA into the same secret it serves
+        # from. Verifying against it keeps the bearer token from reaching
+        # anything that merely answers on the metrics address.
+        ca:
+          secret:
+            name: metrics-server-cert
+            key: ca.crt
+        serverName: controller-manager-metrics-service.system.svc
   selector:
     matchLabels:
       control-plane: controller-manager

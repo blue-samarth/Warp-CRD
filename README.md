@@ -121,7 +121,8 @@ enforced entirely in the validating webhook.
 | `-metrics-bind-address` | `:8443` | Metrics endpoint |
 | `-metrics-secure` | `true` | Serve metrics over HTTPS with authn/authz |
 | `-health-probe-bind-address` | `:8081` | `/healthz` and `/readyz` |
-| `-webhook-cert-dir` | `/tmp/k8s-webhook-server/serving-certs` | Where the serving cert is mounted |
+| `-webhook-cert-dir` | `/tmp/k8s-webhook-server/serving-certs` | Where the webhook serving cert is mounted |
+| `-metrics-cert-dir` | *(empty)* | Where the metrics serving cert is mounted. Empty serves an unverifiable localhost certificate; the deployment sets it. |
 | `-enable-webhooks` | `true` | Serve admission webhooks |
 | `-leader-elect` | `false` | Leader election (the deployment sets this) |
 
@@ -443,7 +444,14 @@ not as Events on an object that was never created.
 
 Served on `:8443` over HTTPS, authenticated and authorized against the API
 server (`TokenReview` / `SubjectAccessReview`) whenever `-metrics-secure` is
-true. A scraper needs the `metrics-reader` ClusterRole. `config/default` installs a
+true. A scraper needs the `metrics-reader` ClusterRole.
+
+The serving certificate comes from cert-manager (`metrics-cert`, issued by the
+same self-signed `Issuer` as the webhook) and is mounted at
+`-metrics-cert-dir`. Without that flag, controller-runtime serves an in-memory
+certificate issued for `localhost`, which nothing can verify by service DNS —
+that is the only reason a scrape config would ever need `insecureSkipVerify`,
+and `config/prometheus` does not use it. `config/default` installs a
 metrics Service plus the `tokenreviews`/`subjectaccessreviews` RBAC that secure
 serving requires; `config/prometheus` adds a `ServiceMonitor` for the
 prometheus-operator.
@@ -463,8 +471,15 @@ condition flips, the previous series is deleted rather than left behind, so
 All series for a WebApp are deleted when it is removed.
 
 ```
-kubectl apply -f config/prometheus     # requires prometheus-operator CRDs
+kubectl apply -k config/prometheus     # requires prometheus-operator CRDs
 ```
+
+Apply it with `-k`, not `-f`: the overlay places the `ServiceMonitor` in the
+operator's namespace and rewrites the `serverName` it verifies against. A
+`ServiceMonitor` selects Services in its own namespace and reads the CA secret
+from there, so a copy applied anywhere else silently scrapes nothing. If you
+changed the namespace in `config/default`, change it in
+`config/prometheus/kustomization.yaml` too.
 
 ---
 

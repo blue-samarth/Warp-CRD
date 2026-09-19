@@ -1,2 +1,26 @@
+# A ServiceMonitor selects Services in its own namespace, and the CA secret it
+# verifies against is read from that namespace too, so this has to land where
+# config/default puts the operator. Keep this value in sync with the namespace
+# there.
+namespace: webapp-operator-system
+
 resources:
   - monitor.yaml
+
+replacements:
+  - source:
+      kind: ServiceMonitor
+      group: monitoring.coreos.com
+      version: v1
+      name: controller-manager-metrics-monitor
+      fieldPath: .metadata.namespace
+    targets:
+      - select:
+          kind: ServiceMonitor
+          group: monitoring.coreos.com
+          version: v1
+        fieldPaths:
+          - .spec.endpoints.0.tlsConfig.serverName
+        options:
+          delimiter: '.'
+          index: 1
