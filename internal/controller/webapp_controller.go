@@ -1,0 +1,264 @@
+package controller
+
+import (
+	"context"
+	"fmt"
+	"time"
+
+	appsv1 "k8s.io/api/apps/v1"
+	autoscalingv2 "k8s.io/api/autoscaling/v2"
+	corev1 "k8s.io/api/core/v1"
+	networkingv1 "k8s.io/api/networking/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/labels"
+	"k8s.io/apimachinery/pkg/runtime"
+	appsv1ac "k8s.io/client-go/applyconfigurations/apps/v1"
+	autoscalingv2ac "k8s.io/client-go/applyconfigurations/autoscaling/v2"
+	corev1ac "k8s.io/client-go/applyconfigurations/core/v1"
+	networkingv1ac "k8s.io/client-go/applyconfigurations/networking/v1"
+	"k8s.io/client-go/tools/record"
+	ctrl "sigs.k8s.io/controller-runtime"
+	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
+	"sigs.k8s.io/controller-runtime/pkg/log"
+
+	"github.com/blue-samarth/Warp-CRD/api/v1alpha1"
+	"github.com/blue-samarth/Warp-CRD/internal/metrics"
+	"github.com/blue-samarth/Warp-CRD/internal/resources"
+)
+
+var (
+	deploymentGVK = appsv1.SchemeGroupVersion.WithKind("Deployment")
+	serviceGVK    = corev1.SchemeGroupVersion.WithKind("Service")
+	ingressGVK    = networkingv1.SchemeGroupVersion.WithKind("Ingress")
+	hpaGVK        = autoscalingv2.SchemeGroupVersion.WithKind("HorizontalPodAutoscaler")
+)
+
+type WebAppReconciler struct {
+	client.Client
+	Scheme   *runtime.Scheme
+	Recorder record.EventRecorder
+}
+
+// +kubebuilder:rbac:groups=webapps.example.com,resources=webapps,verbs=get;list;watch;create;update;patch;delete
+// +kubebuilder:rbac:groups=webapps.example.com,resources=webapps/status,verbs=get;update;patch
+// +kubebuilder:rbac:groups=webapps.example.com,resources=webapps/finalizers,verbs=update
+// +kubebuilder:rbac:groups=apps,resources=deployments,verbs=get;list;watch;create;update;patch;delete
+// +kubebuilder:rbac:groups="",resources=services,verbs=get;list;watch;create;update;patch;delete
+// +kubebuilder:rbac:groups=networking.k8s.io,resources=ingresses,verbs=get;list;watch;create;update;patch;delete
+// +kubebuilder:rbac:groups=autoscaling,resources=horizontalpodautoscalers,verbs=get;list;watch;create;update;patch;delete
+// +kubebuilder:rbac:groups="",resources=events,verbs=create;patch
+
+func (r *WebAppReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
+	start := time.Now()
+	res, err := r.reconcile(ctx, req)
+	outcome := metrics.ResultSuccess
+	if err != nil {
+		outcome = metrics.ResultError
+	}
+	metrics.ReconcileTotal.WithLabelValues(outcome).Inc()
+	metrics.ReconcileDuration.WithLabelValues(outcome).Observe(time.Since(start).Seconds())
+	return res, err
+}
+
+func (r *WebAppReconciler) reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
+	app := &v1alpha1.WebApp{}
+	if err := r.Get(ctx, req.NamespacedName, app); err != nil {
+		if apierrors.IsNotFound(err) {
+			metrics.Forget(req.Name, req.Namespace)
+			return ctrl.Result{}, nil
+		}
+		return ctrl.Result{}, err
+	}
+
+	base := app.DeepCopy()
+
+	if !app.DeletionTimestamp.IsZero() {
+		return ctrl.Result{}, r.finalize(ctx, app)
+	}
+
+	if controllerutil.AddFinalizer(app, v1alpha1.Finalizer) {
+		if err := r.Update(ctx, app); err != nil {
+			return ctrl.Result{}, err
+		}
+	}
+
+	if err := r.sync(ctx, app); err != nil {
+		applyReconcileFailure(app, err)
+		r.Recorder.Event(app, corev1.EventTypeWarning, ReasonReconcileFailed, err.Error())
+		if serr := r.updateStatus(ctx, app, base, nil); serr != nil {
+			return ctrl.Result{}, fmt.Errorf("%w (status update also failed: %v)", err, serr)
+		}
+		return ctrl.Result{}, err
+	}
+
+	dep := &appsv1.Deployment{}
+	if err := r.Get(ctx, client.ObjectKeyFromObject(app), dep); err != nil {
+		if !apierrors.IsNotFound(err) {
+			return ctrl.Result{}, err
+		}
+		dep = nil
+	}
+	if dep != nil {
+		applyDeploymentConditions(app, dep)
+	} else {
+		applyNoDeploymentConditions(app)
+	}
+	return ctrl.Result{}, r.updateStatus(ctx, app, base, dep)
+}
+
+func (r *WebAppReconciler) sync(ctx context.Context, app *v1alpha1.WebApp) error {
+	depAC, err := toApplyConfig[appsv1ac.DeploymentApplyConfiguration](resources.Deployment(app), deploymentGVK)
+	if err != nil {
+		return err
+	}
+	if resources.WantsHPA(app) {
+		depAC.Spec.Replicas = nil
+	}
+	if err := r.apply(ctx, depAC); err != nil {
+		return fmt.Errorf("apply deployment: %w", err)
+	}
+
+	svcAC, err := toApplyConfig[corev1ac.ServiceApplyConfiguration](resources.Service(app), serviceGVK)
+	if err != nil {
+		return err
+	}
+	if err := r.apply(ctx, svcAC); err != nil {
+		return fmt.Errorf("apply service: %w", err)
+	}
+
+	if err := r.syncIngress(ctx, app); err != nil {
+		return err
+	}
+	return r.syncHPA(ctx, app)
+}
+
+func (r *WebAppReconciler) syncIngress(ctx context.Context, app *v1alpha1.WebApp) error {
+	if !resources.WantsIngress(app) {
+		return r.deleteOwned(ctx, app, &networkingv1.Ingress{})
+	}
+	ing, err := resources.Ingress(app)
+	if err != nil {
+		r.Recorder.Event(app, corev1.EventTypeWarning, "IngressBuildFailed", err.Error())
+		return fmt.Errorf("build ingress: %w", err)
+	}
+	ac, err := toApplyConfig[networkingv1ac.IngressApplyConfiguration](ing, ingressGVK)
+	if err != nil {
+		return err
+	}
+	if err := r.apply(ctx, ac); err != nil {
+		r.Recorder.Event(app, corev1.EventTypeWarning, "IngressApplyFailed", err.Error())
+		return fmt.Errorf("apply ingress: %w", err)
+	}
+	return nil
+}
+
+func (r *WebAppReconciler) syncHPA(ctx context.Context, app *v1alpha1.WebApp) error {
+	if !resources.WantsHPA(app) {
+		return r.deleteOwned(ctx, app, &autoscalingv2.HorizontalPodAutoscaler{})
+	}
+	hpa, err := resources.HPA(app)
+	if err != nil {
+		r.Recorder.Event(app, corev1.EventTypeWarning, "HPABuildFailed", err.Error())
+		return fmt.Errorf("build hpa: %w", err)
+	}
+	ac, err := toApplyConfig[autoscalingv2ac.HorizontalPodAutoscalerApplyConfiguration](hpa, hpaGVK)
+	if err != nil {
+		return err
+	}
+	if err := r.apply(ctx, ac); err != nil {
+		return fmt.Errorf("apply hpa: %w", err)
+	}
+	return nil
+}
+
+func (r *WebAppReconciler) deleteOwned(ctx context.Context, app *v1alpha1.WebApp, obj client.Object) error {
+	obj.SetName(app.Name)
+	obj.SetNamespace(app.Namespace)
+	if err := r.Delete(ctx, obj); err != nil && !apierrors.IsNotFound(err) {
+		return fmt.Errorf("delete %T: %w", obj, err)
+	}
+	return nil
+}
+
+func (r *WebAppReconciler) finalize(ctx context.Context, app *v1alpha1.WebApp) error {
+	if !controllerutil.ContainsFinalizer(app, v1alpha1.Finalizer) {
+		return nil
+	}
+	l := log.FromContext(ctx)
+
+	dep := &appsv1.Deployment{}
+	switch err := r.Get(ctx, client.ObjectKeyFromObject(app), dep); {
+	case err == nil:
+		zero := int32(0)
+		if dep.Spec.Replicas == nil || *dep.Spec.Replicas != zero {
+			dep.Spec.Replicas = &zero
+			if err := r.Update(ctx, dep); err != nil && !apierrors.IsNotFound(err) {
+				return fmt.Errorf("scale deployment to zero: %w", err)
+			}
+			l.Info("scaled deployment to zero before deletion")
+		}
+	case !apierrors.IsNotFound(err):
+		return err
+	}
+
+	for _, obj := range []client.Object{
+		&networkingv1.Ingress{},
+		&autoscalingv2.HorizontalPodAutoscaler{},
+		&corev1.Service{},
+		&appsv1.Deployment{},
+	} {
+		if err := r.deleteOwned(ctx, app, obj); err != nil {
+			return err
+		}
+	}
+
+	r.Recorder.Event(app, corev1.EventTypeNormal, "Deleted", "owned resources removed")
+	metrics.Forget(app.Name, app.Namespace)
+
+	controllerutil.RemoveFinalizer(app, v1alpha1.Finalizer)
+	return r.Update(ctx, app)
+}
+
+func (r *WebAppReconciler) updateStatus(ctx context.Context, app *v1alpha1.WebApp, base *v1alpha1.WebApp, dep *appsv1.Deployment) error {
+	if app.Generation != app.Status.ObservedGeneration {
+		r.Recorder.Eventf(app, corev1.EventTypeNormal, "Reconciled",
+			"applied spec generation %d", app.Generation)
+	}
+	if dep != nil && dep.Status.Replicas != base.Status.Replicas {
+		r.Recorder.Eventf(app, corev1.EventTypeNormal, "Scaled",
+			"replicas %d -> %d", base.Status.Replicas, dep.Status.Replicas)
+	}
+
+	app.Status.ObservedGeneration = app.Generation
+	app.Status.IngressURL = resources.IngressURL(app)
+	app.Status.Selector = labels.Set(resources.SelectorLabels(app)).String()
+
+	if dep != nil {
+		app.Status.Replicas = dep.Status.Replicas
+		app.Status.ReadyReplicas = dep.Status.ReadyReplicas
+		app.Status.AvailableReplicas = dep.Status.AvailableReplicas
+		app.Status.UpdatedReplicas = dep.Status.UpdatedReplicas
+	}
+
+	metrics.Replicas.WithLabelValues(app.Name, app.Namespace).Set(float64(app.Status.Replicas))
+	metrics.ReadyReplicas.WithLabelValues(app.Name, app.Namespace).Set(float64(app.Status.ReadyReplicas))
+	for _, c := range app.Status.Conditions {
+		metrics.SetCondition(app.Name, app.Namespace, c.Type, string(c.Status))
+	}
+
+	// MergeFrom carries no resourceVersion, so a reconcile racing the Deployment
+	// watch patches status instead of failing with a conflict.
+	return r.Status().Patch(ctx, app, client.MergeFrom(base))
+}
+
+func (r *WebAppReconciler) SetupWithManager(mgr ctrl.Manager) error {
+	return ctrl.NewControllerManagedBy(mgr).
+		For(&v1alpha1.WebApp{}).
+		Owns(&appsv1.Deployment{}).
+		Owns(&corev1.Service{}).
+		Owns(&networkingv1.Ingress{}).
+		Owns(&autoscalingv2.HorizontalPodAutoscaler{}).
+		Named("webapp").
+		Complete(r)
+}
