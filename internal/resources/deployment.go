@@ -17,10 +17,7 @@ func DesiredReplicas(app *v1alpha1.WebApp) *int32 {
 	if app.Spec.Autoscaling != nil && app.Spec.Autoscaling.Enabled {
 		return nil
 	}
-	if app.Spec.Replicas != nil {
-		return app.Spec.Replicas
-	}
-	return new(int32(1))
+	return app.Spec.Replicas
 }
 
 func Deployment(app *v1alpha1.WebApp) *appsv1.Deployment {

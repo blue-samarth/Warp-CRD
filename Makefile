@@ -2,7 +2,7 @@ IMG ?= webapp-operator:latest
 ENVTEST_K8S_VERSION ?= 1.37.0
 
 CONTROLLER_TOOLS_VERSION ?= v0.22.0
-ENVTEST_VERSION ?= latest
+ENVTEST_VERSION ?= release-0.25
 KUSTOMIZE_VERSION ?= v5.7.1
 
 LOCALBIN := $(shell pwd)/bin
@@ -105,7 +105,13 @@ deploy: manifests kustomize ## Deploy the operator to the current cluster
 	$(KUSTOMIZE) build config/default | kubectl apply --server-side -f -
 
 .PHONY: undeploy
-undeploy: kustomize
+undeploy: kustomize ## Remove the operator, keeping the CRDs and their objects
+	$(KUSTOMIZE) build config/default | grep -v '^# ' | kubectl delete --ignore-not-found -f - --selector='app.kubernetes.io/name=webapp-operator'
+
+.PHONY: uninstall-all
+uninstall-all: kustomize ## Remove the operator AND every WebApp; delete WebApps first so finalizers can run
+	kubectl delete webapps.webapps.example.com --all --all-namespaces --ignore-not-found
+	kubectl delete webapppolicies.webapps.example.com --all --ignore-not-found
 	$(KUSTOMIZE) build config/default | kubectl delete --ignore-not-found -f -
 
 .PHONY: build-installer

@@ -1,4 +1,5 @@
 namespace: webapp-operator-system
+namePrefix: webapp-operator-
 
 resources:
   - ../crd

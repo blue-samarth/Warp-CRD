@@ -2,6 +2,7 @@ package controller
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"time"
 
@@ -29,6 +30,10 @@ import (
 	"github.com/blue-samarth/Warp-CRD/internal/policy"
 	"github.com/blue-samarth/Warp-CRD/internal/resources"
 )
+
+type terminalError struct{ error }
+
+func terminal(format string, a ...any) error { return terminalError{fmt.Errorf(format, a...)} }
 
 var (
 	deploymentGVK = appsv1.SchemeGroupVersion.WithKind("Deployment")
@@ -94,6 +99,10 @@ func (r *WebAppReconciler) reconcile(ctx context.Context, req ctrl.Request) (ctr
 		if serr := r.updateStatus(ctx, app, base, nil); serr != nil {
 			return ctrl.Result{}, fmt.Errorf("%w (status update also failed: %v)", err, serr)
 		}
+		var t terminalError
+		if errors.As(err, &t) {
+			return ctrl.Result{}, nil
+		}
 		return ctrl.Result{}, err
 	}
 
@@ -125,7 +134,7 @@ func (r *WebAppReconciler) sync(ctx context.Context, app *v1alpha1.WebApp) error
 
 	svc := resources.Service(app)
 	if len(svc.Spec.Ports) == 0 {
-		return fmt.Errorf("no container ports declared; the generated Service would be rejected")
+		return terminal("no container ports declared; the generated Service would be rejected")
 	}
 
 	dep := resources.Deployment(app)
@@ -189,7 +198,7 @@ func (r *WebAppReconciler) enforceScalePolicy(ctx context.Context, app *v1alpha1
 	}
 	if len(res.Violations) > 0 {
 		r.Recorder.Event(app, corev1.EventTypeWarning, "PolicyViolation", res.Violations.ToAggregate().Error())
-		return fmt.Errorf("webapppolicy: %w", res.Violations.ToAggregate())
+		return terminalError{fmt.Errorf("webapppolicy: %w", res.Violations.ToAggregate())}
 	}
 	return nil
 }
@@ -197,10 +206,15 @@ func (r *WebAppReconciler) enforceScalePolicy(ctx context.Context, app *v1alpha1
 func (r *WebAppReconciler) replicaHold(ctx context.Context, app *v1alpha1.WebApp) (*int32, error) {
 	key := client.ObjectKeyFromObject(app)
 
-	err := r.Get(ctx, key, &autoscalingv2.HorizontalPodAutoscaler{})
-	switch {
+	// Hold until the HPA has actually computed a target. Releasing as soon as
+	// the object exists lets SSA drop spec.replicas before the first scale,
+	// and the Deployment API defaults the removed field back to 1.
+	var hpa autoscalingv2.HorizontalPodAutoscaler
+	switch err := r.Get(ctx, key, &hpa); {
 	case err == nil:
-		return nil, nil
+		if hpa.Status.DesiredReplicas > 0 {
+			return nil, nil
+		}
 	case !apierrors.IsNotFound(err):
 		return nil, fmt.Errorf("get hpa: %w", err)
 	}
@@ -222,7 +236,7 @@ func (r *WebAppReconciler) syncIngress(ctx context.Context, app *v1alpha1.WebApp
 	ing, err := resources.Ingress(app)
 	if err != nil {
 		r.Recorder.Event(app, corev1.EventTypeWarning, "IngressBuildFailed", err.Error())
-		return fmt.Errorf("build ingress: %w", err)
+		return terminalError{fmt.Errorf("build ingress: %w", err)}
 	}
 	ac, err := toApplyConfig[networkingv1ac.IngressApplyConfiguration](ing, ingressGVK)
 	if err != nil {
@@ -245,7 +259,7 @@ func (r *WebAppReconciler) syncHPA(ctx context.Context, app *v1alpha1.WebApp) er
 	hpa, err := resources.HPA(app)
 	if err != nil {
 		r.Recorder.Event(app, corev1.EventTypeWarning, "HPABuildFailed", err.Error())
-		return fmt.Errorf("build hpa: %w", err)
+		return terminalError{fmt.Errorf("build hpa: %w", err)}
 	}
 	ac, err := toApplyConfig[autoscalingv2ac.HorizontalPodAutoscalerApplyConfiguration](hpa, hpaGVK)
 	if err != nil {
@@ -284,7 +298,7 @@ func (r *WebAppReconciler) assertAdoptable(ctx context.Context, app *v1alpha1.We
 		return fmt.Errorf("get %s: %w", kind, err)
 	}
 	if !metav1.IsControlledBy(obj, app) {
-		return fmt.Errorf("%s %q already exists and is not controlled by this WebApp", kind, app.Name)
+		return terminal("%s %q already exists and is not controlled by this WebApp", kind, app.Name)
 	}
 	return nil
 }
@@ -293,23 +307,6 @@ func (r *WebAppReconciler) finalize(ctx context.Context, app *v1alpha1.WebApp) e
 	if !controllerutil.ContainsFinalizer(app, v1alpha1.Finalizer) {
 		return nil
 	}
-	l := log.FromContext(ctx)
-
-	dep := &appsv1.Deployment{}
-	switch err := r.Get(ctx, client.ObjectKeyFromObject(app), dep); {
-	case err == nil:
-		zero := int32(0)
-		if dep.Spec.Replicas == nil || *dep.Spec.Replicas != zero {
-			dep.Spec.Replicas = &zero
-			if err := r.Update(ctx, dep); err != nil && !apierrors.IsNotFound(err) {
-				return fmt.Errorf("scale deployment to zero: %w", err)
-			}
-			l.Info("scaled deployment to zero before deletion")
-		}
-	case !apierrors.IsNotFound(err):
-		return err
-	}
-
 	for _, obj := range []client.Object{
 		&networkingv1.Ingress{},
 		&autoscalingv2.HorizontalPodAutoscaler{},
@@ -329,16 +326,11 @@ func (r *WebAppReconciler) finalize(ctx context.Context, app *v1alpha1.WebApp) e
 }
 
 func (r *WebAppReconciler) updateStatus(ctx context.Context, app *v1alpha1.WebApp, base *v1alpha1.WebApp, dep *appsv1.Deployment) error {
-	if app.Generation != app.Status.ObservedGeneration {
-		r.Recorder.Eventf(app, corev1.EventTypeNormal, "Reconciled",
-			"applied spec generation %d", app.Generation)
-	}
 	if dep != nil && dep.Status.Replicas != base.Status.Replicas {
 		r.Recorder.Eventf(app, corev1.EventTypeNormal, "Scaled",
 			"replicas %d -> %d", base.Status.Replicas, dep.Status.Replicas)
 	}
 
-	app.Status.ObservedGeneration = app.Generation
 	app.Status.IngressURL = resources.IngressURL(app)
 	app.Status.Selector = labels.Set(resources.SelectorLabels(app)).String()
 

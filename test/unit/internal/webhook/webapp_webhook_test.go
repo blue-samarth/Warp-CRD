@@ -85,11 +85,12 @@ func TestDefault_DoesNotSetReplicasWhenAutoscaling(t *testing.T) {
 	}
 }
 
-func TestDefault_InjectsManagedByLabel(t *testing.T) {
+func TestDefault_LeavesWebAppLabelsAlone(t *testing.T) {
 	app := baseApp()
+	app.Labels = map[string]string{"app.kubernetes.io/managed-by": "Helm"}
 	Default(app)
-	if app.Labels["app.kubernetes.io/managed-by"] != "webapp-operator" {
-		t.Fatalf("missing managed-by label: %v", app.Labels)
+	if got := app.Labels["app.kubernetes.io/managed-by"]; got != "Helm" {
+		t.Fatalf("defaulting must not claim the user's object, got %q", got)
 	}
 }
 
@@ -140,15 +141,26 @@ func TestValidate_RejectsDuplicatePortNamesAcrossContainers(t *testing.T) {
 	}
 }
 
-func TestValidate_AllowsDuplicatePortNumbersWithDistinctNames(t *testing.T) {
+func TestValidate_RejectsSamePortInTwoContainers(t *testing.T) {
 	app := baseApp()
 	app.Spec.Containers = append(app.Spec.Containers, v1alpha1.Container{
 		Name:  "sidecar",
 		Image: "envoy:v1.30",
 		Ports: []v1alpha1.ContainerPort{{Name: "admin", ContainerPort: 8080}},
 	})
+	// One network namespace: the second bind fails at runtime, and the
+	// Service would silently dedupe the pair.
+	if got := fieldErrors(t, app); !strings.Contains(got, "share one network namespace") {
+		t.Fatalf("want the duplicate port rejected, got %q", got)
+	}
+}
+
+func TestValidate_AllowsSamePortOnDifferentProtocols(t *testing.T) {
+	app := baseApp()
+	app.Spec.Containers[0].Ports = append(app.Spec.Containers[0].Ports,
+		v1alpha1.ContainerPort{Name: "dns", ContainerPort: 8080, Protocol: corev1.ProtocolUDP})
 	if errs := ValidateSpec(app); len(errs) != 0 {
-		t.Fatalf("want no errors, got %v", errs)
+		t.Fatalf("TCP and UDP on one port is legal, got %v", errs)
 	}
 }
 

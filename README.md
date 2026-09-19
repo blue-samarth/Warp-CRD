@@ -76,7 +76,7 @@ make run ARGS="-enable-webhooks=false"
 
 | | |
 |---|---|
-| Kubernetes | Built and tested against 1.37 (envtest). Uses `apiextensions/v1`, `networking/v1` and `autoscaling/v2`, so 1.23+ should work, but only 1.37 is exercised by the test suite. |
+| Kubernetes | Built and tested against 1.37 (envtest). The CRD's CEL rules need **1.25+**, and the webhook `matchConditions` guard needs **1.28+** to take effect. Only 1.37 is exercised by the test suite. |
 | cert-manager | Required for the admission webhooks. See below for running without it. |
 | Go | 1.26 for building and for code generation. |
 
@@ -145,7 +145,7 @@ works, and so does an external HPA targeting the WebApp.
 | `ingressClassName` | `string` | — | Ingress class. **Rejected without `domain`.** |
 | `ingressPortName` | `string` | — | Names the port the Ingress routes to. **Rejected without `domain`.** See [Ingress backend selection](#ingress-backend-selection). |
 | `serviceType` | `ClusterIP\|NodePort\|LoadBalancer` | `ClusterIP` | Type of the generated Service. |
-| `replicas` | `int32` | `1` | Desired pods. **Ignored when autoscaling is enabled.** |
+| `replicas` | `int32` | — | Desired pods. Unset means the operator does not manage the field, so a scaled Deployment keeps its count. **Ignored when autoscaling is enabled.** |
 | `autoscaling` | `AutoscalingSpec` | — | See below. |
 | `strategy` | `StrategySpec` | `RollingUpdate` | Rollout behaviour. |
 | `imagePullSecrets` | `[]LocalObjectReference` | — | Passed to the pod template. |
@@ -270,7 +270,10 @@ letting it fail silently after the fact.
 | HorizontalPodAutoscaler | `spec.autoscaling.enabled` | same as the WebApp |
 
 All four carry an `OwnerReference` back to the WebApp with `controller: true`,
-so the cluster garbage collector removes them even if the operator is down.
+so the cluster garbage collector removes them once the WebApp is gone. Note the
+WebApp itself carries a finalizer, so it is not removed — and GC does not start
+— until the operator runs and clears it. See
+[Deletion and finalizers](#deletion-and-finalizers).
 
 ### Labels
 
@@ -292,7 +295,8 @@ ships. `managed-by` is a constant, so including it costs nothing later.
 
 The Service exposes **every** port declared across **all** containers,
 de-duplicated by port number. A port with no name is given a generated one of
-the form `port-<number>`, since a Service with more than one port requires names.
+the form `port-<number>` (`port-<number>-udp` for UDP), since a Service with
+more than one port requires names.
 
 ### Ingress backend selection
 
@@ -638,8 +642,8 @@ applied. `Warn` and `Audit` policies log rather than block, as at admission.
 
 Finalizer: `webapps.example.com/finalizer`.
 
-On delete the operator scales the Deployment to zero, then removes the owned
-resources in order — Ingress, HPA, Service, Deployment — drops its metrics
+On delete the operator removes the owned resources in order — Ingress first so
+traffic stops being routed, then HPA, Service and Deployment — drops its metrics
 series, emits `Deleted`, and only then removes the finalizer.
 
 **Only objects this WebApp controls are touched.** Every delete reads the object
@@ -715,6 +719,8 @@ make docker-build      # container image
 make install           # CRDs into the current cluster
 make deploy            # full operator
 make build-installer   # dist/install.yaml
+make undeploy         # remove the operator, leaving CRDs and WebApps
+make uninstall-all     # remove WebApps first, then everything
 make clean
 ```
 
@@ -843,7 +849,9 @@ The webhooks are not installed, or the manager is running with
 `-enable-webhooks=false`.
 
 **`kubectl scale` fails with "the spec replicas field cannot be empty".**
-`status.selector` is not populated yet — the operator has not reconciled.
+`spec.replicas` is unset. It has no schema default — an unset value means the
+operator does not manage the field — so set it explicitly before scaling, or
+scale a WebApp that already has it.
 
 **Prometheus scrapes return 401.**
 Secure metrics serving requires the `tokenreviews`/`subjectaccessreviews`

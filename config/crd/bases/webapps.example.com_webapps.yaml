@@ -1819,6 +1819,9 @@ spec:
                             - message: reserved mount path
                               rule: self != '/' && !['/proc/','/sys/','/dev/','/etc/','/var/run/secrets/','/run/secrets/'].exists(p,
                                 (self + '/').startsWith(p))
+                            - message: mountPath must be a clean absolute path
+                              rule: '!self.contains(''//'') && !self.contains(''/../'')
+                                && !self.endsWith(''/..'')'
                           name:
                             maxLength: 63
                             minLength: 1
@@ -2040,6 +2043,9 @@ spec:
                 maxLength: 253
                 pattern: ^[a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*$
                 type: string
+                x-kubernetes-validations:
+                - message: domain must be a hostname; the Ingress API rejects IP addresses
+                  rule: '!self.matches(''^[0-9.]+$'')'
               imagePullSecrets:
                 items:
                   description: |-
@@ -2086,7 +2092,6 @@ spec:
                   rule: self.all(k, !(k in ['app.kubernetes.io/name','app.kubernetes.io/instance','app.kubernetes.io/managed-by','pod-template-hash'])
                     && !k.startsWith('webapps.example.com/'))
               replicas:
-                default: 1
                 format: int32
                 minimum: 0
                 type: integer

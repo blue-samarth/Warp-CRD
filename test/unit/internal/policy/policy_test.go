@@ -202,13 +202,22 @@ func TestMatches_RejectsInvalidSelector(t *testing.T) {
 	}
 }
 
-func TestEvaluate_SurfacesInvalidSelector(t *testing.T) {
-	p := basePolicy()
-	p.Spec.NamespaceSelector = &metav1.LabelSelector{
+func TestEvaluate_InvalidSelectorFailsOnlyItsOwnPolicy(t *testing.T) {
+	bad := basePolicy()
+	bad.Name = "broken"
+	bad.Spec.NamespaceSelector = &metav1.LabelSelector{
 		MatchExpressions: []metav1.LabelSelectorRequirement{{Key: "tier", Operator: "NotAnOperator"}},
 	}
-	if _, err := Evaluate(appWithResources(nil, nil), []v1alpha1.WebAppPolicy{p}, nil); err == nil {
-		t.Fatal("want the selector error propagated to the caller")
+	good := basePolicy()
+	good.Name = "healthy"
+	good.Spec.MaxReplicas = new(int32(5))
+
+	res, err := Evaluate(appWithResources(nil, nil), []v1alpha1.WebAppPolicy{bad, good}, nil)
+	if err != nil {
+		t.Fatalf("one broken policy must not abort the evaluation: %v", err)
+	}
+	if len(res.Violations) != 1 || !strings.Contains(res.Violations[0].Field, "namespaceSelector") {
+		t.Fatalf("want the broken policy reported, got %v", res.Violations)
 	}
 }
 

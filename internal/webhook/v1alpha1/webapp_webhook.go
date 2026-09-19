@@ -114,7 +114,8 @@ func warnings(app *apiv1alpha1.WebApp) admission.Warnings {
 		w = append(w, "spec.replicas is ignored while autoscaling is enabled")
 	}
 	for _, c := range app.Spec.Containers {
-		if strings.HasSuffix(c.Image, ":latest") || !strings.Contains(c.Image, ":") {
+		ref := c.Image[strings.LastIndex(c.Image, "/")+1:]
+		if strings.HasSuffix(ref, ":latest") || !strings.Contains(ref, ":") {
 			w = append(w, fmt.Sprintf("container %q uses a mutable image tag; pin a version or digest", c.Name))
 		}
 	}
@@ -154,13 +155,6 @@ func Default(app *apiv1alpha1.WebApp) {
 		}
 	}
 
-	if app.Labels == nil {
-		app.Labels = map[string]string{}
-	}
-	app.Labels[resources.ManagedByLabel] = resources.ManagedByValue
-	if _, ok := app.Labels[resources.NameLabel]; !ok {
-		app.Labels[resources.NameLabel] = app.Name
-	}
 }
 
 func ValidateSpec(app *apiv1alpha1.WebApp) field.ErrorList {
@@ -173,6 +167,7 @@ func ValidateSpec(app *apiv1alpha1.WebApp) field.ErrorList {
 
 	containerNames := map[string]bool{}
 	portOwners := map[string]string{}
+	numberOwners := map[string]string{}
 	for i, c := range app.Spec.Containers {
 		p := spec.Child("containers").Index(i)
 
@@ -198,6 +193,14 @@ func ValidateSpec(app *apiv1alpha1.WebApp) field.ErrorList {
 				errs = append(errs, field.Invalid(pp.Child("containerPort"), port.ContainerPort,
 					"must be between 1 and 65535"))
 			}
+			key := fmt.Sprintf("%d/%s", port.ContainerPort, protocolOf(port))
+			if owner, dup := numberOwners[key]; dup {
+				errs = append(errs, field.Duplicate(pp.Child("containerPort"),
+					fmt.Sprintf("%s (already bound by container %q; containers share one network namespace)",
+						key, owner)))
+			}
+			numberOwners[key] = c.Name
+
 			if port.Name == "" {
 				continue
 			}
@@ -283,6 +286,13 @@ func missingUtilizationRequests(app *apiv1alpha1.WebApp, a *apiv1alpha1.Autoscal
 		}
 	}
 	return errs
+}
+
+func protocolOf(p apiv1alpha1.ContainerPort) corev1.Protocol {
+	if p.Protocol == "" {
+		return corev1.ProtocolTCP
+	}
+	return p.Protocol
 }
 
 func totalPorts(app *apiv1alpha1.WebApp) int {

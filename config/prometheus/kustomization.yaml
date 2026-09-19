@@ -3,6 +3,7 @@
 # config/default puts the operator. Keep this value in sync with the namespace
 # there.
 namespace: webapp-operator-system
+namePrefix: webapp-operator-
 
 resources:
   - monitor.yaml
