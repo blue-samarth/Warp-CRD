@@ -32,6 +32,9 @@ import (
 var (
 	scheme   = runtime.NewScheme()
 	setupLog = ctrl.Log.WithName("setup")
+	// Set by the release build; a downloaded binary should be able to say
+	// which one it is.
+	version = "dev"
 )
 
 func init() {
@@ -62,6 +65,7 @@ func main() {
 	flag.Parse()
 
 	ctrl.SetLogger(zap.New(zap.UseFlagOptions(&opts)))
+	setupLog.Info("starting webapp-operator", "version", version)
 
 	metricsOpts := metricsserver.Options{
 		BindAddress:   metricsAddr,
