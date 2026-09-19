@@ -10,10 +10,13 @@ type EnforcementMode string
 const (
 	EnforcementEnforce EnforcementMode = "Enforce"
 	EnforcementWarn    EnforcementMode = "Warn"
+	EnforcementAudit   EnforcementMode = "Audit"
 )
 
 type ResourcePolicy struct {
-	MinRequests     corev1.ResourceList `json:"minRequests,omitempty"`
+	// +kubebuilder:validation:XValidation:rule="self.all(k, k in ['cpu','memory','ephemeral-storage'])",message="only cpu, memory and ephemeral-storage may be constrained"
+	MinRequests corev1.ResourceList `json:"minRequests,omitempty"`
+	// +kubebuilder:validation:XValidation:rule="self.all(k, k in ['cpu','memory','ephemeral-storage'])",message="only cpu, memory and ephemeral-storage may be constrained"
 	MaxLimits       corev1.ResourceList `json:"maxLimits,omitempty"`
 	RequireRequests bool                `json:"requireRequests,omitempty"`
 	RequireLimits   bool                `json:"requireLimits,omitempty"`
@@ -24,7 +27,7 @@ type WebAppPolicySpec struct {
 	Resources         *ResourcePolicy       `json:"resources,omitempty"`
 	// +kubebuilder:validation:Minimum=1
 	MaxReplicas *int32 `json:"maxReplicas,omitempty"`
-	// +kubebuilder:validation:Enum=Enforce;Warn
+	// +kubebuilder:validation:Enum=Enforce;Warn;Audit
 	// +kubebuilder:default=Enforce
 	Enforcement EnforcementMode `json:"enforcement,omitempty"`
 }
