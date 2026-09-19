@@ -729,7 +729,13 @@ Three workflows:
 |---|---|---|
 | `ci.yml` | every push and pull request | staleness of generated files, gofmt/vet/`go mod tidy -diff`, the unit and envtest suite, every kustomize overlay rendered **and its cross-references asserted**, and the image built |
 | `e2e.yml` | **manual only** (`workflow_dispatch`) | `hack/e2e.sh` — a real kind cluster with cert-manager, exercising RBAC, CA injection, the rendered overlays and PodSecurityAdmission |
-| `release.yml` | a `v*` tag | re-runs the suite, publishes a multi-arch image to GHCR, attaches `dist/install.yaml` pinned to the published digest |
+| `release.yml` | a `v*` tag (or manual dispatch) | re-runs the suite, publishes a multi-arch image to GHCR, and attaches `install.yaml` pinned to the published digest plus cross-compiled binaries and `SHA256SUMS` |
+
+A release needs a **pushed tag** — `git tag v1.0.0 && git push origin v1.0.0`.
+Dispatching `release.yml` by hand republishes the image but creates no GitHub
+release, because that step is gated on `refs/tags/`. A tag may be given as
+`v1.0.0` or `1.0.0`; the `v` is added either way, since the trigger is `v*` and
+a Go module version requires it.
 
 `e2e.yml` is off the automatic path entirely: it costs about ten minutes, which
 is too slow to sit in front of every review. Run it from the Actions tab, or
@@ -746,6 +752,7 @@ make docker-build      # container image
 make install           # CRDs into the current cluster
 make deploy            # full operator
 make build-installer   # dist/install.yaml
+make dist-binaries     # cross-compiled archives + SHA256SUMS in dist/bin
 make undeploy         # remove the operator, leaving CRDs and WebApps
 make uninstall-all     # remove WebApps first, then everything
 make clean

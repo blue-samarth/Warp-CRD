@@ -1,4 +1,6 @@
 IMG ?= webapp-operator:latest
+VERSION ?= dev
+PLATFORMS ?= linux/amd64 linux/arm64 darwin/amd64 darwin/arm64
 ENVTEST_K8S_VERSION ?= 1.37.0
 
 CONTROLLER_TOOLS_VERSION ?= v0.22.0
@@ -78,6 +80,23 @@ test: generate manifests fmt vet envtest ## Run unit + envtest integration tests
 		go test ./... -count=1 -coverpkg=./api/...,./internal/... -coverprofile cover.raw.out
 	@grep -v zz_generated cover.raw.out > cover.out
 	@go tool cover -func=cover.out | tail -1
+
+.PHONY: dist-binaries
+dist-binaries: generate ## Cross-compile the manager for every PLATFORMS entry and checksum it
+	rm -rf dist/bin && mkdir -p dist/bin
+	@for p in $(PLATFORMS); do \
+		os=$${p%/*}; arch=$${p#*/}; \
+		name=webapp-operator_$(VERSION)_$${os}_$${arch}; \
+		echo "  building $$name"; \
+		mkdir -p dist/bin/$$name; \
+		CGO_ENABLED=0 GOOS=$$os GOARCH=$$arch \
+			go build -ldflags="-s -w -X main.version=$(VERSION)" -o dist/bin/$$name/manager ./cmd || exit 1; \
+		cp README.md usage_guide.md dist/bin/$$name/; \
+		tar -C dist/bin -czf dist/bin/$$name.tar.gz $$name; \
+		rm -rf dist/bin/$$name; \
+	done
+	@cd dist/bin && (sha256sum *.tar.gz 2>/dev/null || shasum -a 256 *.tar.gz) > SHA256SUMS
+	@ls -1 dist/bin
 
 .PHONY: check-render
 check-render: build-installer kustomize ## Assert the rendered manifests resolve
