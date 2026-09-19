@@ -689,14 +689,22 @@ internal/policy/         WebAppPolicy evaluation
 internal/metrics/        Prometheus metrics
 cmd/main.go              manager entrypoint
 config/                  CRDs, RBAC, webhook, cert-manager, kustomize overlays
-test/unit/               table-driven unit tests
+test/unit/internal/      table-driven unit tests, mirroring internal/
 test/integration/        envtest suites against a real API server
+.github/workflows/       CI on every push and PR, release on a v* tag
 docs/                    API reference and policy guide
 ```
 
 ---
 
 ## Development
+
+Every push and pull request runs `.github/workflows/ci.yml`: generated files are
+checked for staleness, gofmt/vet/`go mod tidy -diff` must be clean, the full
+unit and envtest suite runs, every kustomize overlay is rendered, and the image
+is built. Tagging `v*` runs `release.yml`, which re-runs the suite, publishes a
+multi-arch image to GHCR and attaches a `dist/install.yaml` pinned to the
+published digest.
 
 ```
 make test              # unit + envtest integration, prints total coverage
@@ -750,9 +758,16 @@ Three kinds, all stdlib `testing` — no ginkgo, no testify.
 
 | Location | Package style | Purpose |
 |---|---|---|
-| `test/unit/` | external `_test` + dot-import | Exported APIs: builders, webhook rules, policy engine |
-| `internal/*/..._test.go` | co-located, internal | Unexported logic and fake-client error injection |
+| `test/unit/internal/<pkg>/` | external `_test` + dot-import | Every unit test, one directory per package under test |
 | `test/integration/` | external `_test` | envtest with a real API server and live admission webhooks |
+
+All tests live under `test/`; no `_test.go` sits beside the code it covers.
+That costs the ability to call unexported functions directly, so the
+reconciler is exercised through `Reconcile` rather than through `sync`,
+`syncIngress` and `deleteOwned` — a better seam anyway, since it catches
+ordering bugs a direct call would step over. The condition helpers in
+`internal/controller` are exported for the same reason; `internal/` keeps them
+module-private regardless.
 
 Error paths a healthy API server never produces are covered with
 `interceptor.Funcs` on the fake client — injecting `Apply` failures, `Delete`

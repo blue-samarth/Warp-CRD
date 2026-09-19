@@ -1,4 +1,6 @@
-package controller
+package controller_test
+
+import . "github.com/blue-samarth/Warp-CRD/internal/controller"
 
 import (
 	"testing"
@@ -28,10 +30,10 @@ func statusOf(app *v1alpha1.WebApp, condType string) *metav1.Condition {
 
 func TestDeploymentCondition_FindsAndMisses(t *testing.T) {
 	dep := deploymentWith(1, cond(appsv1.DeploymentAvailable, corev1.ConditionTrue, "MinimumReplicasAvailable", "ok"))
-	if got := deploymentCondition(dep, appsv1.DeploymentAvailable); got == nil {
+	if got := DeploymentCondition(dep, appsv1.DeploymentAvailable); got == nil {
 		t.Fatal("want Available condition found")
 	}
-	if got := deploymentCondition(dep, appsv1.DeploymentProgressing); got != nil {
+	if got := DeploymentCondition(dep, appsv1.DeploymentProgressing); got != nil {
 		t.Fatalf("want nil for absent condition, got %+v", got)
 	}
 }
@@ -42,7 +44,7 @@ func TestApplyDeploymentConditions_MirrorsAvailable(t *testing.T) {
 		cond(appsv1.DeploymentAvailable, corev1.ConditionTrue, "MinimumReplicasAvailable", "ok"),
 		cond(appsv1.DeploymentProgressing, corev1.ConditionTrue, "NewReplicaSetAvailable", "rolled out"),
 	)
-	applyDeploymentConditions(app, dep)
+	ApplyDeploymentConditions(app, dep)
 
 	if c := statusOf(app, v1alpha1.ConditionAvailable); c == nil || c.Status != metav1.ConditionTrue {
 		t.Fatalf("want Available=True, got %+v", c)
@@ -57,7 +59,7 @@ func TestApplyDeploymentConditions_MirrorsAvailable(t *testing.T) {
 
 func TestApplyDeploymentConditions_UnknownWhenDeploymentSilent(t *testing.T) {
 	app := &v1alpha1.WebApp{}
-	applyDeploymentConditions(app, deploymentWith(1))
+	ApplyDeploymentConditions(app, deploymentWith(1))
 
 	for _, ct := range []string{v1alpha1.ConditionAvailable, v1alpha1.ConditionProgressing} {
 		c := statusOf(app, ct)
@@ -76,7 +78,7 @@ func TestApplyDeploymentConditions_StalledRolloutIsDegraded(t *testing.T) {
 		cond(appsv1.DeploymentAvailable, corev1.ConditionFalse, "MinimumReplicasUnavailable", "down"),
 		cond(appsv1.DeploymentProgressing, corev1.ConditionFalse, "ProgressDeadlineExceeded", "timed out"),
 	)
-	applyDeploymentConditions(app, dep)
+	ApplyDeploymentConditions(app, dep)
 
 	d := statusOf(app, v1alpha1.ConditionDegraded)
 	if d == nil || d.Status != metav1.ConditionTrue || d.Reason != ReasonRolloutStalled {
@@ -93,7 +95,7 @@ func TestSetReady_TrueWhenAllReplicasUpdatedAndReady(t *testing.T) {
 	dep := deploymentWith(3)
 	dep.Status.UpdatedReplicas = 3
 	dep.Status.ReadyReplicas = 3
-	setReady(app, dep, false)
+	SetReady(app, dep, false)
 
 	c := statusOf(app, v1alpha1.ConditionReady)
 	if c == nil || c.Status != metav1.ConditionTrue || c.Reason != ReasonAllReplicas {
@@ -106,7 +108,7 @@ func TestSetReady_FalseWhenPartiallyRolledOut(t *testing.T) {
 	dep := deploymentWith(3)
 	dep.Status.UpdatedReplicas = 1
 	dep.Status.ReadyReplicas = 1
-	setReady(app, dep, false)
+	SetReady(app, dep, false)
 
 	c := statusOf(app, v1alpha1.ConditionReady)
 	if c == nil || c.Status != metav1.ConditionFalse || c.Reason != ReasonNotReady {
@@ -120,7 +122,7 @@ func TestSetReady_DefaultsDesiredToOneWhenReplicasNil(t *testing.T) {
 	dep.Status.UpdatedReplicas = 1
 	dep.Status.ReadyReplicas = 1
 
-	setReady(app, dep, false)
+	SetReady(app, dep, false)
 	if c := statusOf(app, v1alpha1.ConditionReady); c == nil || c.Status != metav1.ConditionTrue {
 		t.Fatalf("want Ready=True with nil replicas treated as 1, got %+v", c)
 	}
@@ -129,7 +131,7 @@ func TestSetReady_DefaultsDesiredToOneWhenReplicasNil(t *testing.T) {
 func TestSetCondition_RecordsObservedGeneration(t *testing.T) {
 	app := &v1alpha1.WebApp{}
 	app.Generation = 7
-	setCondition(app, v1alpha1.ConditionReady, metav1.ConditionTrue, ReasonAllReplicas, "ok")
+	SetCondition(app, v1alpha1.ConditionReady, metav1.ConditionTrue, ReasonAllReplicas, "ok")
 
 	c := statusOf(app, v1alpha1.ConditionReady)
 	if c == nil || c.ObservedGeneration != 7 {
@@ -138,10 +140,10 @@ func TestSetCondition_RecordsObservedGeneration(t *testing.T) {
 }
 
 func TestReasonOr_FallsBackWhenEmpty(t *testing.T) {
-	if got := reasonOr("", "fallback"); got != "fallback" {
+	if got := ReasonOr("", "fallback"); got != "fallback" {
 		t.Fatalf("want fallback, got %q", got)
 	}
-	if got := reasonOr("actual", "fallback"); got != "actual" {
+	if got := ReasonOr("actual", "fallback"); got != "actual" {
 		t.Fatalf("want actual, got %q", got)
 	}
 }

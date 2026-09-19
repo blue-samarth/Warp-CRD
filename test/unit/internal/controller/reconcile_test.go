@@ -1,4 +1,6 @@
-package controller
+package controller_test
+
+import . "github.com/blue-samarth/Warp-CRD/internal/controller"
 
 import (
 	"context"
@@ -211,7 +213,7 @@ func TestSyncHPA_RemovesHPAWhenAutoscalingDisabled(t *testing.T) {
 	}
 	r := newReconciler(t, interceptor.Funcs{}, app, hpa)
 
-	if err := r.syncHPA(t.Context(), app); err != nil {
+	if _, err := r.Reconcile(t.Context(), appKey); err != nil {
 		t.Fatal(err)
 	}
 	err := r.Get(t.Context(), appKey.NamespacedName, &autoscalingv2.HorizontalPodAutoscaler{})
@@ -223,10 +225,10 @@ func TestSyncHPA_RemovesHPAWhenAutoscalingDisabled(t *testing.T) {
 func TestSyncIngress_SurfacesBuildError(t *testing.T) {
 	app := testApp()
 	app.Spec.Domain = "example.com"
-	app.Spec.Containers[0].Ports = nil
+	app.Spec.IngressPortName = "nope"
 
 	r := newReconciler(t, interceptor.Funcs{}, app)
-	err := r.syncIngress(t.Context(), app)
+	_, err := r.Reconcile(t.Context(), appKey)
 	if err == nil || !strings.Contains(err.Error(), "build ingress") {
 		t.Fatalf("want a build error when no port can back the ingress, got %v", err)
 	}
@@ -242,7 +244,7 @@ func TestSyncIngress_SurfacesApplyError(t *testing.T) {
 		},
 	}, app)
 
-	err := r.syncIngress(t.Context(), app)
+	_, err := r.Reconcile(t.Context(), appKey)
 	if err == nil || !strings.Contains(err.Error(), "ingress admission denied") {
 		t.Fatalf("want the apply error surfaced, got %v", err)
 	}
@@ -253,7 +255,7 @@ func TestSyncIngress_RemovesIngressWhenDomainCleared(t *testing.T) {
 	ing := &networkingv1.Ingress{ObjectMeta: ownedMeta()}
 	r := newReconciler(t, interceptor.Funcs{}, app, ing)
 
-	if err := r.syncIngress(t.Context(), app); err != nil {
+	if _, err := r.Reconcile(t.Context(), appKey); err != nil {
 		t.Fatal(err)
 	}
 	if err := r.Get(t.Context(), appKey.NamespacedName, &networkingv1.Ingress{}); !apierrors.IsNotFound(err) {
@@ -277,7 +279,7 @@ func TestDeleteOwned_LeavesForeignObjectAlone(t *testing.T) {
 	r := newReconciler(t, interceptor.Funcs{}, app,
 		&networkingv1.Ingress{ObjectMeta: foreignMeta()})
 
-	if err := r.deleteOwned(t.Context(), app, &networkingv1.Ingress{}); err != nil {
+	if _, err := r.Reconcile(t.Context(), appKey); err != nil {
 		t.Fatal(err)
 	}
 	if err := r.Get(t.Context(), appKey.NamespacedName, &networkingv1.Ingress{}); err != nil {
@@ -332,7 +334,7 @@ func TestDeleteOwned_SurfacesNonNotFoundErrors(t *testing.T) {
 		},
 	}, app, &networkingv1.Ingress{ObjectMeta: ownedMeta()})
 
-	err := r.deleteOwned(t.Context(), app, &networkingv1.Ingress{})
+	_, err := r.Reconcile(t.Context(), appKey)
 	if err == nil || !strings.Contains(err.Error(), "forbidden") {
 		t.Fatalf("want delete error surfaced, got %v", err)
 	}

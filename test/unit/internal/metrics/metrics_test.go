@@ -1,4 +1,6 @@
-package metrics
+package metrics_test
+
+import . "github.com/blue-samarth/Warp-CRD/internal/metrics"
 
 import (
 	"testing"
