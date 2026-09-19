@@ -214,3 +214,40 @@ func TestSchema_RejectsUnknownPolicyResourceKey(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 }
+
+func TestSchema_RejectsIPDomain(t *testing.T) {
+	for _, host := range []string{"10.0.0.1", "192.168.1.1"} {
+		app := baseWebApp(newNamespace(t), "ip-domain")
+		app.Spec.Domain = host
+		rejects(t, app, "Ingress API rejects IP addresses")
+	}
+}
+
+func TestSchema_RejectsUncleanScratchMountPaths(t *testing.T) {
+	for _, path := range []string{"/tmp/../etc", "//etc", "/./etc", "/tmp/.", "/tmp/"} {
+		app := baseWebApp(newNamespace(t), "unclean-mount")
+		app.Spec.Containers[0].ScratchVolumes = []v1alpha1.ScratchVolume{
+			{Name: "v", MountPath: path},
+		}
+		err := k8sClient.Create(testCtx, app)
+		if err == nil {
+			t.Fatalf("mountPath %q must be rejected", path)
+		}
+		if !strings.Contains(err.Error(), "clean absolute path") &&
+			!strings.Contains(err.Error(), "reserved mount path") {
+			t.Fatalf("mountPath %q: unexpected error %v", path, err)
+		}
+	}
+}
+
+func TestSchema_DefaultsReplicasForTheScaleSubresource(t *testing.T) {
+	app := baseWebApp(newNamespace(t), "replica-default")
+	if err := k8sClient.Create(testCtx, app); err != nil {
+		t.Fatal(err)
+	}
+	// specReplicasPath is resolved on every scale read, so the field cannot be
+	// absent; kubectl scale fails with "does not exist" without this.
+	if app.Spec.Replicas == nil || *app.Spec.Replicas != 1 {
+		t.Fatalf("want replicas defaulted to 1, got %v", app.Spec.Replicas)
+	}
+}

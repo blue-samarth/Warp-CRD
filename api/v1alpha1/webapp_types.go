@@ -63,7 +63,7 @@ type ScratchVolume struct {
 	// +kubebuilder:validation:MaxLength=4096
 	// +kubebuilder:validation:Pattern=`^/`
 	// +kubebuilder:validation:XValidation:rule="self != '/' && !['/proc/','/sys/','/dev/','/etc/','/var/run/secrets/','/run/secrets/'].exists(p, (self + '/').startsWith(p))",message="reserved mount path"
-	// +kubebuilder:validation:XValidation:rule="!self.contains('//') && !self.contains('/../') && !self.endsWith('/..')",message="mountPath must be a clean absolute path"
+	// +kubebuilder:validation:XValidation:rule="!self.contains('//') && !self.contains('/../') && !self.endsWith('/..') && !self.contains('/./') && !self.endsWith('/.') && (self == '/' || !self.endsWith('/'))",message="mountPath must be a clean absolute path with no trailing slash"
 	MountPath string `json:"mountPath"`
 	// +kubebuilder:default=Disk
 	Medium    ScratchMedium      `json:"medium,omitempty"`
@@ -143,6 +143,7 @@ type WebAppSpec struct {
 	// +kubebuilder:default=ClusterIP
 	ServiceType corev1.ServiceType `json:"serviceType,omitempty"`
 	// +kubebuilder:validation:Minimum=0
+	// +kubebuilder:default=1
 	Replicas         *int32                        `json:"replicas,omitempty"`
 	Autoscaling      *AutoscalingSpec              `json:"autoscaling,omitempty"`
 	Strategy         *StrategySpec                 `json:"strategy,omitempty"`

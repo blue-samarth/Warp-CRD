@@ -30,10 +30,9 @@ func baseApp() *v1alpha1.WebApp {
 	}
 }
 
-func TestDesiredReplicas_NilWhenUnset(t *testing.T) {
-	// Unset means "not ours": sending a value would snap a scaled app back.
-	if got := DesiredReplicas(baseApp()); got != nil {
-		t.Fatalf("want nil so the field stays unmanaged, got %d", *got)
+func TestDesiredReplicas_FallsBackToOne(t *testing.T) {
+	if got := DesiredReplicas(baseApp()); got == nil || *got != 1 {
+		t.Fatalf("want 1 when the schema default has not been applied, got %v", got)
 	}
 }
 

@@ -1819,9 +1819,11 @@ spec:
                             - message: reserved mount path
                               rule: self != '/' && !['/proc/','/sys/','/dev/','/etc/','/var/run/secrets/','/run/secrets/'].exists(p,
                                 (self + '/').startsWith(p))
-                            - message: mountPath must be a clean absolute path
+                            - message: mountPath must be a clean absolute path with
+                                no trailing slash
                               rule: '!self.contains(''//'') && !self.contains(''/../'')
-                                && !self.endsWith(''/..'')'
+                                && !self.endsWith(''/..'') && !self.contains(''/./'')
+                                && !self.endsWith(''/.'') && (self == ''/'' || !self.endsWith(''/''))'
                           name:
                             maxLength: 63
                             minLength: 1
@@ -2092,6 +2094,7 @@ spec:
                   rule: self.all(k, !(k in ['app.kubernetes.io/name','app.kubernetes.io/instance','app.kubernetes.io/managed-by','pod-template-hash'])
                     && !k.startsWith('webapps.example.com/'))
               replicas:
+                default: 1
                 format: int32
                 minimum: 0
                 type: integer

@@ -2,6 +2,7 @@ package controller
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"time"
@@ -33,7 +34,13 @@ import (
 
 type terminalError struct{ error }
 
+type externalError struct{ error }
+
 func terminal(format string, a ...any) error { return terminalError{fmt.Errorf(format, a...)} }
+
+func external(format string, a ...any) error { return externalError{fmt.Errorf(format, a...)} }
+
+const externalRetry = time.Minute
 
 var (
 	deploymentGVK = appsv1.SchemeGroupVersion.WithKind("Deployment")
@@ -102,6 +109,10 @@ func (r *WebAppReconciler) reconcile(ctx context.Context, req ctrl.Request) (ctr
 		var t terminalError
 		if errors.As(err, &t) {
 			return ctrl.Result{}, nil
+		}
+		var e externalError
+		if errors.As(err, &e) {
+			return ctrl.Result{RequeueAfter: externalRetry}, nil
 		}
 		return ctrl.Result{}, err
 	}
@@ -198,26 +209,13 @@ func (r *WebAppReconciler) enforceScalePolicy(ctx context.Context, app *v1alpha1
 	}
 	if len(res.Violations) > 0 {
 		r.Recorder.Event(app, corev1.EventTypeWarning, "PolicyViolation", res.Violations.ToAggregate().Error())
-		return terminalError{fmt.Errorf("webapppolicy: %w", res.Violations.ToAggregate())}
+		return externalError{fmt.Errorf("webapppolicy: %w", res.Violations.ToAggregate())}
 	}
 	return nil
 }
 
 func (r *WebAppReconciler) replicaHold(ctx context.Context, app *v1alpha1.WebApp) (*int32, error) {
 	key := client.ObjectKeyFromObject(app)
-
-	// Hold until the HPA has actually computed a target. Releasing as soon as
-	// the object exists lets SSA drop spec.replicas before the first scale,
-	// and the Deployment API defaults the removed field back to 1.
-	var hpa autoscalingv2.HorizontalPodAutoscaler
-	switch err := r.Get(ctx, key, &hpa); {
-	case err == nil:
-		if hpa.Status.DesiredReplicas > 0 {
-			return nil, nil
-		}
-	case !apierrors.IsNotFound(err):
-		return nil, fmt.Errorf("get hpa: %w", err)
-	}
 
 	var dep appsv1.Deployment
 	if err := r.Get(ctx, key, &dep); err != nil {
@@ -226,7 +224,34 @@ func (r *WebAppReconciler) replicaHold(ctx context.Context, app *v1alpha1.WebApp
 		}
 		return nil, fmt.Errorf("get deployment: %w", err)
 	}
+	// Releasing the field before another manager owns it lets SSA remove it,
+	// and the Deployment API defaults the removed field back to 1. The HPA
+	// writes spec.replicas only when desired differs from current, so its
+	// status is not evidence of ownership; managedFields is.
+	if ReplicasOwnedByOther(&dep) {
+		return nil, nil
+	}
 	return dep.Spec.Replicas, nil
+}
+
+func ReplicasOwnedByOther(dep *appsv1.Deployment) bool {
+	for _, e := range dep.ManagedFields {
+		if e.Manager == FieldOwner || e.FieldsV1 == nil {
+			continue
+		}
+		var fields map[string]any
+		if err := json.Unmarshal(e.FieldsV1.Raw, &fields); err != nil {
+			continue
+		}
+		spec, ok := fields["f:spec"].(map[string]any)
+		if !ok {
+			continue
+		}
+		if _, ok := spec["f:replicas"]; ok {
+			return true
+		}
+	}
+	return false
 }
 
 func (r *WebAppReconciler) syncIngress(ctx context.Context, app *v1alpha1.WebApp) error {
@@ -298,7 +323,7 @@ func (r *WebAppReconciler) assertAdoptable(ctx context.Context, app *v1alpha1.We
 		return fmt.Errorf("get %s: %w", kind, err)
 	}
 	if !metav1.IsControlledBy(obj, app) {
-		return terminal("%s %q already exists and is not controlled by this WebApp", kind, app.Name)
+		return external("%s %q already exists and is not controlled by this WebApp", kind, app.Name)
 	}
 	return nil
 }

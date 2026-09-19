@@ -145,7 +145,7 @@ works, and so does an external HPA targeting the WebApp.
 | `ingressClassName` | `string` | — | Ingress class. **Rejected without `domain`.** |
 | `ingressPortName` | `string` | — | Names the port the Ingress routes to. **Rejected without `domain`.** See [Ingress backend selection](#ingress-backend-selection). |
 | `serviceType` | `ClusterIP\|NodePort\|LoadBalancer` | `ClusterIP` | Type of the generated Service. |
-| `replicas` | `int32` | — | Desired pods. Unset means the operator does not manage the field, so a scaled Deployment keeps its count. **Ignored when autoscaling is enabled.** |
+| `replicas` | `int32` | `1` | Desired pods. Defaulted by the schema because the `scale` subresource resolves `.spec.replicas` on every read. **Ignored when autoscaling is enabled**, and applied again when autoscaling is turned off — set it before disabling, or the app returns to this value. |
 | `autoscaling` | `AutoscalingSpec` | — | See below. |
 | `strategy` | `StrategySpec` | `RollingUpdate` | Rollout behaviour. |
 | `imagePullSecrets` | `[]LocalObjectReference` | — | Passed to the pod template. |
@@ -294,7 +294,8 @@ ships. `managed-by` is a constant, so including it costs nothing later.
 ### Service ports
 
 The Service exposes **every** port declared across **all** containers,
-de-duplicated by port number. A port with no name is given a generated one of
+de-duplicated by port number **and protocol**, so the same number can appear
+once as TCP and once as UDP. A port with no name is given a generated one of
 the form `port-<number>` (`port-<number>-udp` for UDP), since a Service with
 more than one port requires names.
 
@@ -448,7 +449,7 @@ not as Events on an object that was never created.
 
 Served on `:8443` over HTTPS, authenticated and authorized against the API
 server (`TokenReview` / `SubjectAccessReview`) whenever `-metrics-secure` is
-true. A scraper needs the `metrics-reader` ClusterRole.
+true. A scraper needs the `webapp-operator-metrics-reader` ClusterRole.
 
 The serving certificate comes from cert-manager (`metrics-cert`, issued by the
 same self-signed `Issuer` as the webhook) and is mounted at
@@ -493,13 +494,19 @@ changed the namespace in `config/default`, change it in
 
 | Field | Defaulted to |
 |---|---|
-| `spec.replicas` | `1`, only when autoscaling is disabled |
 | `spec.serviceType` | `ClusterIP` |
 | `spec.strategy.type` | `RollingUpdate` |
 | `spec.containers[].ports[].protocol` | `TCP` |
 | `spec.autoscaling.minReplicas` | `1`, when enabled |
 | `spec.autoscaling.targetCPUUtilizationPercentage` | `70`, when enabled and no CPU **or memory** target is set |
-| labels | `app.kubernetes.io/managed-by`, and `app.kubernetes.io/name` if unset |
+
+`spec.replicas` is absent from this table on purpose: the **schema** defaults
+it, not the webhook. Defaulting it in both places made the webhook's branch
+unreachable. It cannot be left unset, because the `scale` subresource resolves
+`.spec.replicas` on every read and fails with `does not exist` otherwise.
+
+The operator also leaves the WebApp's own labels alone — only the objects it
+generates are labelled, so Helm and Argo keep ownership of the WebApp.
 
 Defaulting is idempotent.
 
@@ -551,7 +558,6 @@ forever. Better to refuse it at admission with an explanation.
 
 ### Warnings (admitted, but flagged)
 
-- `spec.replicas is ignored while autoscaling is enabled`
 - `container "web" uses a mutable image tag; pin a version or digest`
 
 ---
@@ -856,7 +862,7 @@ scale a WebApp that already has it.
 **Prometheus scrapes return 401.**
 Secure metrics serving requires the `tokenreviews`/`subjectaccessreviews`
 ClusterRole in `config/rbac/metrics_auth_role.yaml`, and the scraper needs the
-`metrics-reader` role.
+`webapp-operator-metrics-reader` role.
 
 **`go build` fails with `does not implement runtime.Object`.**
 Run `make generate`. See [Code generation](#code-generation).

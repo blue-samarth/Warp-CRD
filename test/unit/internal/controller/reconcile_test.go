@@ -418,3 +418,88 @@ func TestReconcile_EmitsScaledEventWhenReplicasChange(t *testing.T) {
 		t.Fatalf("want a Scaled event reporting the transition, got %q", events)
 	}
 }
+
+func TestReplicaHold_KeepsCountUntilAnotherManagerOwnsIt(t *testing.T) {
+	app := testApp()
+	app.Spec.Autoscaling = &v1alpha1.AutoscalingSpec{
+		Enabled: true, MinReplicas: new(int32(2)), MaxReplicas: new(int32(9)),
+	}
+	dep := &appsv1.Deployment{ObjectMeta: ownedMeta(), Spec: appsv1.DeploymentSpec{Replicas: new(int32(6))}}
+	r := newReconciler(t, interceptor.Funcs{}, app, dep)
+
+	if _, err := r.Reconcile(t.Context(), appKey); err != nil {
+		t.Fatal(err)
+	}
+	got := &appsv1.Deployment{}
+	if err := r.Get(t.Context(), appKey.NamespacedName, got); err != nil {
+		t.Fatal(err)
+	}
+	// No manager owns spec.replicas yet, so releasing it here would let the
+	// Deployment API default the field back to 1.
+	if got.Spec.Replicas == nil || *got.Spec.Replicas != 6 {
+		t.Fatalf("want the running count held at 6, got %v", got.Spec.Replicas)
+	}
+}
+
+func TestReplicasOwnedByOther(t *testing.T) {
+	entry := func(manager, raw string) metav1.ManagedFieldsEntry {
+		return metav1.ManagedFieldsEntry{
+			Manager:  manager,
+			FieldsV1: &metav1.FieldsV1{Raw: []byte(raw)},
+		}
+	}
+	cases := []struct {
+		name   string
+		fields []metav1.ManagedFieldsEntry
+		want   bool
+	}{
+		{"nobody", nil, false},
+		{"only us", []metav1.ManagedFieldsEntry{
+			entry("webapp-operator", `{"f:spec":{"f:replicas":{}}}`)}, false},
+		{"hpa owns it", []metav1.ManagedFieldsEntry{
+			entry("horizontal-pod-autoscaler", `{"f:spec":{"f:replicas":{}}}`)}, true},
+		{"other manager, other field", []metav1.ManagedFieldsEntry{
+			entry("kubectl", `{"f:spec":{"f:template":{}}}`)}, false},
+		{"replicas outside spec does not count", []metav1.ManagedFieldsEntry{
+			entry("kubectl", `{"f:status":{"f:replicas":{}}}`)}, false},
+		{"unparsable entry is ignored", []metav1.ManagedFieldsEntry{
+			entry("kubectl", `not json`)}, false},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			dep := &appsv1.Deployment{}
+			dep.ManagedFields = c.fields
+			if got := ReplicasOwnedByOther(dep); got != c.want {
+				t.Fatalf("want %v, got %v", c.want, got)
+			}
+		})
+	}
+}
+
+func TestReconcile_AdoptionConflictRetries(t *testing.T) {
+	r := newReconciler(t, interceptor.Funcs{}, testApp(),
+		&appsv1.Deployment{ObjectMeta: foreignMeta()})
+
+	res, err := r.Reconcile(t.Context(), appKey)
+	if err != nil {
+		t.Fatalf("want no error, got %v", err)
+	}
+	// Someone deleting the foreign object is the fix, and nothing watches it.
+	if res.RequeueAfter == 0 {
+		t.Fatal("want a retry scheduled for an externally resolved conflict")
+	}
+}
+
+func TestReconcile_SpecErrorDoesNotRetry(t *testing.T) {
+	app := testApp()
+	app.Spec.Containers[0].Ports = nil
+	r := newReconciler(t, interceptor.Funcs{}, app)
+
+	res, err := r.Reconcile(t.Context(), appKey)
+	if err != nil {
+		t.Fatalf("want no error, got %v", err)
+	}
+	if res.RequeueAfter != 0 {
+		t.Fatal("a spec error is fixed by editing the spec, which reconciles on its own")
+	}
+}

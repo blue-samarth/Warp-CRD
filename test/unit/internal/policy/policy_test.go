@@ -216,8 +216,13 @@ func TestEvaluate_InvalidSelectorFailsOnlyItsOwnPolicy(t *testing.T) {
 	if err != nil {
 		t.Fatalf("one broken policy must not abort the evaluation: %v", err)
 	}
-	if len(res.Violations) != 1 || !strings.Contains(res.Violations[0].Field, "namespaceSelector") {
-		t.Fatalf("want the broken policy reported, got %v", res.Violations)
+	// Skipped, not enforced: a selector that will not parse must never deny
+	// every WebApp in the cluster. The policy webhook rejects it at write time.
+	if len(res.Violations) != 0 {
+		t.Fatalf("a broken policy must not deny anything, got %v", res.Violations)
+	}
+	if len(res.Audited) != 1 || !strings.Contains(res.Audited[0], "broken") {
+		t.Fatalf("want the skip recorded against its policy, got %v", res.Audited)
 	}
 }
 

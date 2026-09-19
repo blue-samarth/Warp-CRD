@@ -56,8 +56,10 @@ func fieldErrors(t *testing.T, app *v1alpha1.WebApp) string {
 func TestDefault_SetsReplicasAndServiceType(t *testing.T) {
 	app := baseApp()
 	Default(app)
-	if app.Spec.Replicas == nil || *app.Spec.Replicas != 1 {
-		t.Fatalf("want replicas 1, got %v", app.Spec.Replicas)
+	// spec.replicas is defaulted by the schema, not here; defaulting it twice
+	// is what made the nil branch unreachable and the warning always fire.
+	if app.Spec.Replicas != nil {
+		t.Fatalf("the webhook must not default replicas, got %d", *app.Spec.Replicas)
 	}
 	if app.Spec.ServiceType != corev1.ServiceTypeClusterIP {
 		t.Fatalf("want ClusterIP, got %s", app.Spec.ServiceType)
@@ -97,9 +99,9 @@ func TestDefault_LeavesWebAppLabelsAlone(t *testing.T) {
 func TestDefault_IsIdempotent(t *testing.T) {
 	app := baseApp()
 	Default(app)
-	first := *app.Spec.Replicas
+	first := app.Spec.ServiceType
 	Default(app)
-	if *app.Spec.Replicas != first {
+	if app.Spec.ServiceType != first {
 		t.Fatal("defaulting must be idempotent")
 	}
 }
@@ -249,18 +251,6 @@ func TestWarnings_FlagsMutableImageTag(t *testing.T) {
 	}
 	if len(w) == 0 || !strings.Contains(strings.Join(w, " "), "mutable image tag") {
 		t.Fatalf("want a mutable-tag warning, got %v", w)
-	}
-}
-
-func TestWarnings_FlagsIgnoredReplicas(t *testing.T) {
-	app := autoscaledApp(5)
-	app.Spec.Replicas = new(int32(3))
-	w, err := (WebAppValidator{}).ValidateCreate(t.Context(), app)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !strings.Contains(strings.Join(w, " "), "spec.replicas is ignored") {
-		t.Fatalf("want ignored-replicas warning, got %v", w)
 	}
 }
 

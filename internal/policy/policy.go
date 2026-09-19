@@ -37,8 +37,7 @@ func Evaluate(app *v1alpha1.WebApp, policies []v1alpha1.WebAppPolicy, nsLabels m
 		p := &policies[i]
 		ok, err := Matches(p, nsLabels)
 		if err != nil {
-			record(&res, p, field.ErrorList{field.Invalid(
-				field.NewPath("spec", "namespaceSelector"), p.Spec.NamespaceSelector, err.Error())})
+			res.Audited = append(res.Audited, fmt.Sprintf("policy %q skipped: %s", p.Name, err))
 			continue
 		}
 		if !ok {
@@ -55,8 +54,7 @@ func EvaluateScale(app *v1alpha1.WebApp, policies []v1alpha1.WebAppPolicy, nsLab
 		p := &policies[i]
 		ok, err := Matches(p, nsLabels)
 		if err != nil {
-			record(&res, p, field.ErrorList{field.Invalid(
-				field.NewPath("spec", "namespaceSelector"), p.Spec.NamespaceSelector, err.Error())})
+			res.Audited = append(res.Audited, fmt.Sprintf("policy %q skipped: %s", p.Name, err))
 			continue
 		}
 		if !ok {

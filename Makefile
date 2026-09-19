@@ -104,14 +104,13 @@ deploy: manifests kustomize ## Deploy the operator to the current cluster
 	cd config/manager && $(KUSTOMIZE) edit set image controller=$(IMG)
 	$(KUSTOMIZE) build config/default | kubectl apply --server-side -f -
 
+# WebApps go first so their finalizers run while the operator is still up, and
+# the whole render goes together so the webhook configurations never outlive the
+# Service they point at: with failurePolicy Fail they would reject every write.
 .PHONY: undeploy
-undeploy: kustomize ## Remove the operator, keeping the CRDs and their objects
-	$(KUSTOMIZE) build config/default | grep -v '^# ' | kubectl delete --ignore-not-found -f - --selector='app.kubernetes.io/name=webapp-operator'
-
-.PHONY: uninstall-all
-uninstall-all: kustomize ## Remove the operator AND every WebApp; delete WebApps first so finalizers can run
-	kubectl delete webapps.webapps.example.com --all --all-namespaces --ignore-not-found
-	kubectl delete webapppolicies.webapps.example.com --all --ignore-not-found
+undeploy: kustomize ## Remove every WebApp, then the operator, CRDs included
+	-kubectl delete webapps.webapps.example.com --all --all-namespaces --ignore-not-found --timeout=2m
+	-kubectl delete webapppolicies.webapps.example.com --all --ignore-not-found --timeout=2m
 	$(KUSTOMIZE) build config/default | kubectl delete --ignore-not-found -f -
 
 .PHONY: build-installer

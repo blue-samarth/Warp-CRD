@@ -102,7 +102,32 @@ jobs:
       - name: Render the optional overlays
         run: |
           ./bin/kustomize build config/crd > /dev/null
-          ./bin/kustomize build config/prometheus > /dev/null
+          ./bin/kustomize build config/prometheus > dist/monitor.yaml
+      # Rendering proves nothing on its own: the namespace and name transformers
+      # rewrite cert DNS names, the inject-ca-from annotation and serverName as
+      # strings, and a broken replacement is silently wrong rather than fatal.
+      - name: Cross-references resolve
+        run: |
+          set -eu
+          fail() { echo "::error::$1"; exit 1; }
+          grep -q 'name: webapp-operator-webhook-service' dist/install.yaml \
+            || fail "webhook service is not name-prefixed"
+          grep -q 'inject-ca-from: webapp-operator-system/webapp-operator-serving-cert' dist/install.yaml \
+            || fail "inject-ca-from does not point at the rendered certificate"
+          grep -q 'webapp-operator-webhook-service.webapp-operator-system.svc$' dist/install.yaml \
+            || fail "webhook certificate dnsNames were not rewritten"
+          grep -q 'webapp-operator-controller-manager-metrics-service.webapp-operator-system.svc$' dist/install.yaml \
+            || fail "metrics certificate dnsNames were not rewritten"
+          grep -q 'kind: Namespace' dist/install.yaml \
+            && grep -q 'name: webapp-operator-system' dist/install.yaml \
+            || fail "the target namespace is not created"
+          grep -q 'serverName: webapp-operator-controller-manager-metrics-service.webapp-operator-system.svc' dist/monitor.yaml \
+            || fail "ServiceMonitor serverName does not match the metrics service"
+          grep -q 'namespace: webapp-operator-system' dist/monitor.yaml \
+            || fail "ServiceMonitor is not co-located with the metrics service"
+          grep -qv 'insecureSkipVerify' dist/monitor.yaml \
+            || fail "ServiceMonitor still skips TLS verification"
+          echo "all cross-references resolve"
       - uses: actions/upload-artifact@v4
         with:
           name: install.yaml

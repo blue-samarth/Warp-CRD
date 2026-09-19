@@ -110,9 +110,6 @@ func invalidOrNil(app *apiv1alpha1.WebApp, errs field.ErrorList) error {
 
 func warnings(app *apiv1alpha1.WebApp) admission.Warnings {
 	var w admission.Warnings
-	if app.Spec.Autoscaling != nil && app.Spec.Autoscaling.Enabled && app.Spec.Replicas != nil {
-		w = append(w, "spec.replicas is ignored while autoscaling is enabled")
-	}
 	for _, c := range app.Spec.Containers {
 		ref := c.Image[strings.LastIndex(c.Image, "/")+1:]
 		if strings.HasSuffix(ref, ":latest") || !strings.Contains(ref, ":") {
@@ -143,8 +140,6 @@ func Default(app *apiv1alpha1.WebApp) {
 			app.Spec.Autoscaling.TargetMemoryUtilizationPercentage == nil {
 			app.Spec.Autoscaling.TargetCPUUtilizationPercentage = new(resources.DefaultTargetCPU)
 		}
-	} else if app.Spec.Replicas == nil {
-		app.Spec.Replicas = new(int32(1))
 	}
 
 	for i := range app.Spec.Containers {
