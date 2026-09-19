@@ -39,6 +39,7 @@ type Container struct {
 	StartupProbe    *corev1.Probe               `json:"startupProbe,omitempty"`
 	SecurityContext *ContainerSecurityContext   `json:"securityContext,omitempty"`
 	// +kubebuilder:validation:MaxItems=8
+	// +kubebuilder:validation:XValidation:rule="self.all(v, self.exists_one(w, w.mountPath == v.mountPath))",message="scratchVolumes mountPath must be unique within a container"
 	// +listType=map
 	// +listMapKey=name
 	ScratchVolumes []ScratchVolume `json:"scratchVolumes,omitempty"`
@@ -52,6 +53,7 @@ const (
 	ScratchMediumMemory ScratchMedium = "Memory"
 )
 
+// +kubebuilder:validation:XValidation:rule="self.medium != 'Memory' || has(self.sizeLimit)",message="sizeLimit is required when medium is Memory; a tmpfs counts against the container memory limit"
 type ScratchVolume struct {
 	// +kubebuilder:validation:MinLength=1
 	// +kubebuilder:validation:MaxLength=63
@@ -60,6 +62,7 @@ type ScratchVolume struct {
 	// +kubebuilder:validation:MinLength=1
 	// +kubebuilder:validation:MaxLength=4096
 	// +kubebuilder:validation:Pattern=`^/`
+	// +kubebuilder:validation:XValidation:rule="self != '/' && !['/proc/','/sys/','/dev/','/etc/','/var/run/secrets/','/run/secrets/'].exists(p, (self + '/').startsWith(p))",message="reserved mount path"
 	MountPath string `json:"mountPath"`
 	// +kubebuilder:default=Disk
 	Medium    ScratchMedium      `json:"medium,omitempty"`
@@ -151,10 +154,10 @@ type WebAppSpec struct {
 	ServiceAccountName string              `json:"serviceAccountName,omitempty"`
 	SecurityContext    *PodSecurityContext `json:"securityContext,omitempty"`
 	// +kubebuilder:validation:MaxProperties=32
-	// +kubebuilder:validation:XValidation:rule="self.all(k, !(k in ['app.kubernetes.io/name','app.kubernetes.io/instance','app.kubernetes.io/managed-by']) && !k.contains('webapps.example.com/'))",message="app.kubernetes.io/name, /instance, /managed-by and webapps.example.com/ are reserved by the operator"
+	// +kubebuilder:validation:XValidation:rule="self.all(k, !(k in ['app.kubernetes.io/name','app.kubernetes.io/instance','app.kubernetes.io/managed-by','pod-template-hash']) && !k.startsWith('webapps.example.com/'))",message="app.kubernetes.io/name, /instance, /managed-by, pod-template-hash and webapps.example.com/ are reserved"
 	PodLabels map[string]string `json:"podLabels,omitempty"`
 	// +kubebuilder:validation:MaxProperties=32
-	// +kubebuilder:validation:XValidation:rule="self.all(k, !k.contains('webapps.example.com/'))",message="webapps.example.com/ is reserved by the operator"
+	// +kubebuilder:validation:XValidation:rule="self.all(k, !k.startsWith('webapps.example.com/'))",message="webapps.example.com/ is reserved by the operator"
 	PodAnnotations map[string]string `json:"podAnnotations,omitempty"`
 }
 

@@ -1812,6 +1812,10 @@ spec:
                             minLength: 1
                             pattern: ^/
                             type: string
+                            x-kubernetes-validations:
+                            - message: reserved mount path
+                              rule: self != '/' && !['/proc/','/sys/','/dev/','/etc/','/var/run/secrets/','/run/secrets/'].exists(p,
+                                (self + '/').startsWith(p))
                           name:
                             maxLength: 63
                             minLength: 1
@@ -1827,11 +1831,19 @@ spec:
                         - mountPath
                         - name
                         type: object
+                        x-kubernetes-validations:
+                        - message: sizeLimit is required when medium is Memory; a
+                            tmpfs counts against the container memory limit
+                          rule: self.medium != 'Memory' || has(self.sizeLimit)
                       maxItems: 8
                       type: array
                       x-kubernetes-list-map-keys:
                       - name
                       x-kubernetes-list-type: map
+                      x-kubernetes-validations:
+                      - message: scratchVolumes mountPath must be unique within a
+                          container
+                        rule: self.all(v, self.exists_one(w, w.mountPath == v.mountPath))
                     securityContext:
                       properties:
                         readOnlyRootFilesystem:
@@ -2059,17 +2071,17 @@ spec:
                 type: object
                 x-kubernetes-validations:
                 - message: webapps.example.com/ is reserved by the operator
-                  rule: self.all(k, !k.contains('webapps.example.com/'))
+                  rule: self.all(k, !k.startsWith('webapps.example.com/'))
               podLabels:
                 additionalProperties:
                   type: string
                 maxProperties: 32
                 type: object
                 x-kubernetes-validations:
-                - message: app.kubernetes.io/name, /instance, /managed-by and webapps.example.com/
-                    are reserved by the operator
-                  rule: self.all(k, !(k in ['app.kubernetes.io/name','app.kubernetes.io/instance','app.kubernetes.io/managed-by'])
-                    && !k.contains('webapps.example.com/'))
+                - message: app.kubernetes.io/name, /instance, /managed-by, pod-template-hash
+                    and webapps.example.com/ are reserved
+                  rule: self.all(k, !(k in ['app.kubernetes.io/name','app.kubernetes.io/instance','app.kubernetes.io/managed-by','pod-template-hash'])
+                    && !k.startsWith('webapps.example.com/'))
               replicas:
                 default: 1
                 format: int32

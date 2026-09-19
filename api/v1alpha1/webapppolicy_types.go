@@ -2,6 +2,7 @@ package v1alpha1
 
 import (
 	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
@@ -28,7 +29,8 @@ type WebAppPolicySpec struct {
 	// +kubebuilder:validation:MaxItems=32
 	AllowedServiceAccounts []string `json:"allowedServiceAccounts,omitempty"`
 	// +kubebuilder:validation:MaxItems=32
-	ForbiddenPodAnnotationPrefixes []string `json:"forbiddenPodAnnotationPrefixes,omitempty"`
+	ForbiddenPodAnnotationPrefixes []string           `json:"forbiddenPodAnnotationPrefixes,omitempty"`
+	MaxScratchSize                 *resource.Quantity `json:"maxScratchSize,omitempty"`
 	// +kubebuilder:validation:Minimum=1
 	MaxReplicas *int32 `json:"maxReplicas,omitempty"`
 	// +kubebuilder:validation:Enum=Enforce;Warn;Audit

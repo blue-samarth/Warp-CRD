@@ -70,6 +70,12 @@ spec:
                 format: int32
                 minimum: 1
                 type: integer
+              maxScratchSize:
+                anyOf:
+                - type: integer
+                - type: string
+                pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
+                x-kubernetes-int-or-string: true
               namespaceSelector:
                 description: |-
                   A label selector is a label query over a set of resources. The result of matchLabels and
