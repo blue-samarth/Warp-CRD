@@ -30,6 +30,11 @@ hello   True    1          1                 30s
 
 ---
 
+New here? [usage_guide.md](usage_guide.md) is a task-oriented walkthrough.
+Working on the code? [docs/internals.md](docs/internals.md) covers every
+package and function, and [docs/decisions.md](docs/decisions.md) records what
+was fixed, what it cost, and what is still open.
+
 ## Contents
 
 - [Quick start](#quick-start)
@@ -709,7 +714,8 @@ config/                  CRDs, RBAC, webhook, cert-manager, kustomize overlays
 test/unit/internal/      table-driven unit tests, mirroring internal/
 test/integration/        envtest suites against a real API server
 .github/workflows/       CI on every push and PR, release on a v* tag
-docs/                    API reference and policy guide
+docs/                    API reference, internals, policy and decisions
+usage_guide.md           task-oriented walkthrough
 ```
 
 ---
