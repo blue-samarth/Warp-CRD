@@ -89,7 +89,7 @@ func (r *WebAppReconciler) reconcile(ctx context.Context, req ctrl.Request) (ctr
 	}
 
 	if err := r.sync(ctx, app); err != nil {
-		applyReconcileFailure(app, err)
+		ApplyReconcileFailure(app, err)
 		r.Recorder.Event(app, corev1.EventTypeWarning, ReasonReconcileFailed, err.Error())
 		if serr := r.updateStatus(ctx, app, base, nil); serr != nil {
 			return ctrl.Result{}, fmt.Errorf("%w (status update also failed: %v)", err, serr)
@@ -111,9 +111,9 @@ func (r *WebAppReconciler) reconcile(ctx context.Context, req ctrl.Request) (ctr
 	app.Status.ObservedGeneration = app.Generation
 
 	if dep != nil {
-		applyDeploymentConditions(app, dep)
+		ApplyDeploymentConditions(app, dep)
 	} else {
-		applyNoDeploymentConditions(app)
+		ApplyNoDeploymentConditions(app)
 	}
 	return ctrl.Result{}, r.updateStatus(ctx, app, base, dep)
 }

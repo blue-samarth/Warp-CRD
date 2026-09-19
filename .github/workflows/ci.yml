@@ -1,0 +1,124 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  # zz_generated.deepcopy.go is gitignored, so every job that compiles has to
+  # run `make generate` first. The make targets below already depend on it.
+  GOTOOLCHAIN: local
+
+jobs:
+  verify:
+    name: Generated files are current
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: Cache tool binaries
+        uses: actions/cache@v4
+        with:
+          path: bin
+          key: tools-${{ runner.os }}-${{ hashFiles('Makefile') }}
+      - run: make verify
+
+  lint:
+    name: Format and vet
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+      - run: make generate
+      - name: gofmt
+        run: |
+          unformatted=$(gofmt -l ./api ./cmd ./internal ./test)
+          if [ -n "$unformatted" ]; then
+            echo "::error::gofmt needed on:"; echo "$unformatted"; exit 1
+          fi
+      - run: go vet ./...
+      - name: go mod tidy is clean
+        run: go mod tidy -diff
+
+  test:
+    name: Unit and envtest
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: Cache tool binaries
+        uses: actions/cache@v4
+        with:
+          path: bin
+          key: tools-${{ runner.os }}-${{ hashFiles('Makefile') }}
+      - run: make test
+      - name: Coverage summary
+        run: go tool cover -func=cover.out | tail -1 >> "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: coverage
+          path: cover.out
+          retention-days: 7
+
+  manifests:
+    name: Manifests render
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: Cache tool binaries
+        uses: actions/cache@v4
+        with:
+          path: bin
+          key: tools-${{ runner.os }}-${{ hashFiles('Makefile') }}
+      # A broken overlay is invisible to go test, so render every one that is
+      # meant to be applied.
+      - name: Render the deployment overlay
+        env:
+          IMAGE_REF: ghcr.io/${{ github.repository }}:ci
+        run: make build-installer IMG="$IMAGE_REF"
+      - name: Render the optional overlays
+        run: |
+          ./bin/kustomize build config/crd > /dev/null
+          ./bin/kustomize build config/prometheus > /dev/null
+      - uses: actions/upload-artifact@v4
+        with:
+          name: install.yaml
+          path: dist/install.yaml
+          retention-days: 7
+
+  image:
+    name: Image builds
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: false
+          tags: webapp-operator:ci
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
