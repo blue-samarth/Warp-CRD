@@ -714,6 +714,7 @@ config/                  CRDs, RBAC, webhook, cert-manager, kustomize overlays
 test/unit/internal/      table-driven unit tests, mirroring internal/
 test/integration/        envtest suites against a real API server
 .github/workflows/       CI on every push and PR, release on a v* tag
+hack/e2e.sh              end-to-end run against a kind cluster
 docs/                    API reference, internals, policy and decisions
 usage_guide.md           task-oriented walkthrough
 ```
@@ -722,15 +723,22 @@ usage_guide.md           task-oriented walkthrough
 
 ## Development
 
-Every push and pull request runs `.github/workflows/ci.yml`: generated files are
-checked for staleness, gofmt/vet/`go mod tidy -diff` must be clean, the full
-unit and envtest suite runs, every kustomize overlay is rendered, and the image
-is built. Tagging `v*` runs `release.yml`, which re-runs the suite, publishes a
-multi-arch image to GHCR and attaches a `dist/install.yaml` pinned to the
-published digest.
+Three workflows:
+
+| Workflow | Runs on | Does |
+|---|---|---|
+| `ci.yml` | every push and pull request | staleness of generated files, gofmt/vet/`go mod tidy -diff`, the unit and envtest suite, every kustomize overlay rendered **and its cross-references asserted**, and the image built |
+| `e2e.yml` | **manual only** (`workflow_dispatch`) | `hack/e2e.sh` — a real kind cluster with cert-manager, exercising RBAC, CA injection, the rendered overlays and PodSecurityAdmission |
+| `release.yml` | a `v*` tag | re-runs the suite, publishes a multi-arch image to GHCR, attaches `dist/install.yaml` pinned to the published digest |
+
+`e2e.yml` is off the automatic path entirely: it costs about ten minutes, which
+is too slow to sit in front of every review. Run it from the Actions tab, or
+locally with `make e2e`, **before merging anything that touches reconcile logic,
+RBAC or `config/`** — nothing will run it for you.
 
 ```
 make test              # unit + envtest integration, prints total coverage
+make e2e               # real cluster: creates kind, deploys, exercises everything
 make verify            # fail if generated files are stale
 make build             # bin/manager
 make run               # run against the current kubeconfig
@@ -785,6 +793,7 @@ Three kinds, all stdlib `testing` — no ginkgo, no testify.
 |---|---|---|
 | `test/unit/internal/<pkg>/` | external `_test` + dot-import | Every unit test, one directory per package under test |
 | `test/integration/` | external `_test` | envtest with a real API server and live admission webhooks |
+| `hack/e2e.sh` | shell | a real cluster: RBAC, cert-manager CA injection, the rendered overlays, and PodSecurityAdmission enforcing |
 
 All tests live under `test/`; no `_test.go` sits beside the code it covers.
 That costs the ability to call unexported functions directly, so the
